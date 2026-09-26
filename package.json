@@ -1,0 +1,22 @@
+{
+  "name": "mto-estimator",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "mobile": "npm run start -w @mto/mobile",
+    "mobile:web": "npm run web -w @mto/mobile",
+    "api": "npm run dev -w @mto/api",
+    "api:build": "npm run build -w @mto/api",
+    "api:test": "npm test -w @mto/api",
+    "db:migrate": "npm run db:migrate -w @mto/api",
+    "db:seed": "npm run db:seed -w @mto/api",
+    "catalog": "npm run catalog -w @mto/mobile"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

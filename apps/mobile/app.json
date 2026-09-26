@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "XMTO",
+    "slug": "xmto",
+    "description": "XMTO \u2013 MEP Material Take-off by XOITT Transformation. Plumbing and electrical material take-offs, priced on site, shared with your team.",
+    "version": "1.0.0",
+    "scheme": "xmto",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1F2150"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.xoitt.xmto"
+    },
+    "android": {
+      "package": "com.xoitt.xmto",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1F2150"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png",
+      "name": "XMTO \u2013 MEP Material Take-off",
+      "shortName": "XMTO",
+      "themeColor": "#1F2150",
+      "backgroundColor": "#F2F5FA"
+    },
+    "plugins": [
+      "expo-status-bar",
+      "expo-sharing",
+      "expo-mail-composer",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "XMTO uses Face ID to unlock the app."
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "extra": {
+      "apiUrl": "http://localhost:4000"
+    }
+  }
+}

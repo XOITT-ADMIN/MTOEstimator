@@ -1,0 +1,43 @@
+{
+  "name": "@mto/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "XMTO API \u2014 companies, team, shared library (rates + stock) and estimate sync.",
+  "scripts": {
+    "dev": "prisma generate && tsx watch --env-file-if-exists=.env src/server.ts",
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev && prisma generate",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "prisma generate && tsx --env-file-if-exists=.env src/seed.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --env-file-if-exists=.env --test test/*.test.ts",
+    "start:prod": "prisma migrate deploy && node dist/server.js",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@fastify/jwt": "^10.2.2",
+    "@fastify/rate-limit": "^11.2.0",
+    "@fastify/websocket": "^11.3.1",
+    "@mto/shared": "*",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "fastify": "^5.12.5",
+    "nodemailer": "^10.0.10",
+    "pg": "^8.23.0",
+    "prisma": "^7.10.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "@types/nodemailer": "^8.0.2",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9",
+    "ws": "^8.21.3"
+  }
+}

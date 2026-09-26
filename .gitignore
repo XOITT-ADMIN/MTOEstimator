@@ -1,0 +1,17 @@
+node_modules/
+.expo/
+dist/
+web-build/
+*.log
+.DS_Store
+google-services.json
+GoogleService-Info.plist
+.env
+apps/api/src/generated/
+
+credentials/
+builds/
+*.keystore
+_to_delete/
+**/_to_delete/
+Claude outputs/

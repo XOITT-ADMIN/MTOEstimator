@@ -1,0 +1,35 @@
+{
+  "name": "@mto/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Catalog, default rates, keys and pricing maths shared by the mobile app and the API.",
+  "type": "module",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./catalog": {
+      "types": "./src/index.d.ts",
+      "default": "./src/catalog.js"
+    },
+    "./rates": {
+      "types": "./src/index.d.ts",
+      "default": "./src/rates.js"
+    },
+    "./calculations": {
+      "types": "./src/index.d.ts",
+      "default": "./src/calculations.js"
+    },
+    "./keys": {
+      "types": "./src/index.d.ts",
+      "default": "./src/keys.js"
+    },
+    "./catalogTools": {
+      "types": "./src/index.d.ts",
+      "default": "./src/catalogTools.js"
+    }
+  }
+}

@@ -1,0 +1,332 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; font-variant-numeric: tabular-nums; }
+    a { color: #1E3A5F; text-decoration: none; }
+    a:hover { color: #142943; }
+    .scrollHide::-webkit-scrollbar { display: none; }
+    .scrollHide { scrollbar-width: none; -ms-overflow-style: none; }
+    .iconbtn { display: flex; align-items: center; justify-content: center; background: #D9E8EF; border-radius: 12px; cursor: pointer; }
+    .iconbtn:active { opacity: 0.7; }
+    .grouphead { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: #D9E8EF; cursor: pointer; }
+    .grouphead:hover { background: #cfe1ea; }
+    .itemrow { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid #C4DCE6; background: #FFFFFF; position: relative; }
+    .itemrow:hover .rowdel { opacity: 1; }
+    .chip { display: inline-flex; align-items: center; padding: 5px 11px; border-radius: 999px; border: 1px solid #C4DCE6; background: #FFFFFF; font-size: 12.5px; font-weight: 600; color: #5B6572; white-space: nowrap; flex-shrink: 0; }
+    .chip.active { background: #1E3A5F; border-color: #1E3A5F; color: #FFFFFF; box-shadow: 0 2px 6px rgba(20,41,67,0.06); }
+    .spectag { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 6px; background: #E4ECF4; font-size: 10.5px; font-weight: 600; color: #1E3A5F; }
+    .pill { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; }
+  </style>
+</helmet>
+
+<div style="width:390px;height:844px;overflow:hidden;display:flex;flex-direction:column;background:#E8F1F6;position:relative;">
+
+  <!-- safe area -->
+  <div style="height:47px;flex-shrink:0;background:#FFFFFF;"></div>
+
+  <!-- native-style header -->
+  <div style="flex-shrink:0;background:#FFFFFF;border-bottom:1px solid #C4DCE6;padding:10px 14px 12px;display:flex;align-items:flex-start;gap:10px;">
+    <div class="iconbtn" style="width:36px;height:36px;flex-shrink:0;">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#1E3A5F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </div>
+    <div style="flex:1;min-width:0;">
+      <div style="display:flex;align-items:center;gap:7px;">
+        <div style="font-size:16.5px;font-weight:700;color:#142943;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Block A — Site Office</div>
+        <div class="pill" style="background:#FBE7CF;color:#E07B1E;flex-shrink:0;">Draft</div>
+      </div>
+      <div class="mono" style="font-size:11px;color:#5B6572;margin-top:3px;letter-spacing:0.3px;">AEGIS BUILDERS · WHITEFIELD, BLR</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0;">
+      <div class="iconbtn" style="width:36px;height:36px;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#1E3A5F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M8 8l4-4 4 4"/><path d="M5 15v3a2 2 0 002 2h10a2 2 0 002-2v-3"/></svg>
+      </div>
+      <div class="iconbtn" style="width:36px;height:36px;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="#1E3A5F"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- segmented subtabs -->
+  <div style="flex-shrink:0;padding:10px 14px 0;">
+    <div style="display:flex;background:#D9E8EF;border-radius:12px;padding:3px;">
+      <div style="flex:1;text-align:center;padding:8px 0;border-radius:9px;font-size:12.5px;font-weight:600;color:#5B6572;">Details</div>
+      <div style="flex:1;text-align:center;padding:8px 0;border-radius:9px;font-size:12.5px;font-weight:700;color:#142943;background:#FFFFFF;box-shadow:0 2px 6px rgba(20,41,67,0.08);">Items · 10</div>
+      <div style="flex:1;text-align:center;padding:8px 0;border-radius:9px;font-size:12.5px;font-weight:600;color:#5B6572;">Summary</div>
+    </div>
+  </div>
+
+  <!-- toolbar: trade stats + search + filters + group toggle -->
+  <div style="flex-shrink:0;padding:12px 14px 8px;display:flex;flex-direction:column;gap:10px;">
+
+    <div style="display:flex;gap:8px;">
+      <div style="flex:1;display:flex;align-items:center;gap:7px;background:#FFFFFF;border:1px solid #C4DCE6;border-radius:12px;padding:9px 12px;box-shadow:0 2px 6px rgba(20,41,67,0.06);">
+        <span style="width:8px;height:8px;border-radius:4px;background:#1E3A5F;flex-shrink:0;"></span>
+        <span style="font-size:12px;color:#5B6572;">Plumbing</span>
+        <span class="mono" style="margin-left:auto;font-size:14px;font-weight:700;color:#142943;">6</span>
+      </div>
+      <div style="flex:1;display:flex;align-items:center;gap:7px;background:#FFFFFF;border:1px solid #C4DCE6;border-radius:12px;padding:9px 12px;box-shadow:0 2px 6px rgba(20,41,67,0.06);">
+        <span style="width:8px;height:8px;border-radius:4px;background:#E07B1E;flex-shrink:0;"></span>
+        <span style="font-size:12px;color:#5B6572;">Electrical</span>
+        <span class="mono" style="margin-left:auto;font-size:14px;font-weight:700;color:#142943;">4</span>
+      </div>
+    </div>
+
+    <div style="position:relative;display:flex;align-items:center;">
+      <svg style="position:absolute;left:12px;pointer-events:none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8B93A0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <div style="flex:1;background:#FFFFFF;border:1px solid #C4DCE6;border-radius:999px;padding:10px 12px 10px 34px;font-size:13px;color:#8B93A0;">Search items, sizes, specs…</div>
+      <div class="iconbtn" style="width:38px;height:38px;margin-left:8px;flex-shrink:0;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1E3A5F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="#1E3A5F" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="#1E3A5F" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="#1E3A5F" stroke="none"/></svg>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div style="flex:1;overflow-x:auto;white-space:nowrap;" class="scrollHide">
+        <span class="chip active" style="margin-right:6px;">All</span>
+        <span class="chip" style="margin-right:6px;">Pipe</span>
+        <span class="chip" style="margin-right:6px;">Pipe Fitting</span>
+        <span class="chip" style="margin-right:6px;">Valve</span>
+        <span class="chip" style="margin-right:6px;">Power Cable</span>
+        <span class="chip">Cable Mgmt.</span>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <div class="mono" style="font-size:10.5px;font-weight:700;color:#8B93A0;letter-spacing:0.5px;text-transform:uppercase;">Grouped by trade</div>
+      <div style="display:flex;background:#D9E8EF;border-radius:8px;padding:2px;">
+        <div style="padding:5px 10px;border-radius:6px;background:#FFFFFF;font-size:11px;font-weight:700;color:#142943;box-shadow:0 1px 3px rgba(20,41,67,0.08);">Trade</div>
+        <div style="padding:5px 10px;border-radius:6px;font-size:11px;font-weight:600;color:#5B6572;">Family</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- scrollable item groups -->
+  <div style="flex:1;min-height:0;overflow-y:auto;padding:4px 14px 16px;" class="scrollHide">
+
+    <!-- Plumbing -->
+    <div style="display:flex;align-items:center;gap:6px;margin:10px 2px 6px;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1E3A5F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C12 2 5 10.5 5 15a7 7 0 0014 0C19 10.5 12 2 12 2z"/></svg>
+      <span class="mono" style="font-size:10.5px;font-weight:700;color:#1E3A5F;letter-spacing:0.5px;text-transform:uppercase;">Plumbing</span>
+    </div>
+
+    <div style="border:1px solid #C4DCE6;border-radius:14px;overflow:hidden;margin-bottom:12px;box-shadow:0 2px 6px rgba(20,41,67,0.06);">
+      <div class="grouphead">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5B6572" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        <span style="flex:1;font-size:12.5px;font-weight:700;color:#142943;">Pipe</span>
+        <span class="mono" style="font-size:11px;color:#5B6572;">2</span>
+      </div>
+
+      <div class="itemrow">
+        <div style="width:38px;height:38px;border-radius:10px;background:#E4ECF4;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="mono" style="font-size:11px;font-weight:700;color:#1E3A5F;">PI</span>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;font-weight:600;color:#1B2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Pipe · UPVC</div>
+          <div style="display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;"><span class="spectag">100 mm</span></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div class="mono" style="font-size:14.5px;font-weight:700;color:#142943;">240</div>
+          <div style="font-size:10px;color:#8B93A0;text-align:right;">m</div>
+        </div>
+      </div>
+
+      <div class="itemrow">
+        <div style="width:38px;height:38px;border-radius:10px;background:#E4ECF4;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="mono" style="font-size:11px;font-weight:700;color:#1E3A5F;">PI</span>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;font-weight:600;color:#1B2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Pipe · CPVC</div>
+          <div style="display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;"><span class="spectag">25 mm</span></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div class="mono" style="font-size:14.5px;font-weight:700;color:#142943;">85</div>
+          <div style="font-size:10px;color:#8B93A0;text-align:right;">m</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border:1px solid #C4DCE6;border-radius:14px;overflow:hidden;margin-bottom:12px;box-shadow:0 2px 6px rgba(20,41,67,0.06);">
+      <div class="grouphead">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5B6572" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        <span style="flex:1;font-size:12.5px;font-weight:700;color:#142943;">Pipe Fitting</span>
+        <span class="mono" style="font-size:11px;color:#5B6572;">3</span>
+      </div>
+
+      <div class="itemrow">
+        <div style="width:38px;height:38px;border-radius:10px;background:#E4ECF4;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="mono" style="font-size:11px;font-weight:700;color:#1E3A5F;">EL</span>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;font-weight:600;color:#1B2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">90° Elbow · UPVC</div>
+          <div style="display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;"><span class="spectag">50 mm</span></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div class="mono" style="font-size:14.5px;font-weight:700;color:#142943;">36</div>
+          <div style="font-size:10px;color:#8B93A0;text-align:right;">Nos</div>
+        </div>
+      </div>
+
+      <div class="itemrow">
+        <div style="width:38px;height:38px;border-radius:10px;background:#E4ECF4;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="mono" style="font-size:11px;font-weight:700;color:#1E3A5F;">EQ</span>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;font-weight:600;color:#1B2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Equal Tee · UPVC</div>
+          <div style="display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;"><span class="spectag">32 mm</span></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div class="mono" style="font-size:14.5px;font-weight:700;color:#142943;">18</div>
+          <div style="font-size:10px;color:#8B93A0;text-align:right;">Nos</div>
+        </div>
+      </div>
+
+      <!-- swipe-to-delete demo row -->
+      <div style="position:relative;overflow:hidden;border-top:1px solid #C4DCE6;">
+        <div style="position:absolute;top:0;right:0;bottom:0;width:72px;background:#C0392B;display:flex;align-items:center;justify-content:center;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a2 2 0 012-2h2a2 2 0 012 2v2"/><path d="M6 7l1 13a2 2 0 002 2h6a2 2 0 002-2l1-13"/></svg>
+        </div>
+        <div class="itemrow" style="transform:translateX(-72px);border-top:none;">
+          <div style="width:38px;height:38px;border-radius:10px;background:#E4ECF4;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <span class="mono" style="font-size:11px;font-weight:700;color:#1E3A5F;">CR</span>
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13.5px;font-weight:600;color:#1B2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Concentric Reducer · CPVC</div>
+            <div style="display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;"><span class="spectag">40 → 25 mm</span></div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <div class="mono" style="font-size:14.5px;font-weight:700;color:#142943;">12</div>
+            <div style="font-size:10px;color:#8B93A0;text-align:right;">Nos</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border:1px solid #C4DCE6;border-radius:14px;overflow:hidden;margin-bottom:20px;box-shadow:0 2px 6px rgba(20,41,67,0.06);">
+      <div class="grouphead">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5B6572" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        <span style="flex:1;font-size:12.5px;font-weight:700;color:#142943;">Valve</span>
+        <span class="mono" style="font-size:11px;color:#5B6572;">1</span>
+      </div>
+      <div class="itemrow">
+        <div style="width:38px;height:38px;border-radius:10px;background:#E4ECF4;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="mono" style="font-size:11px;font-weight:700;color:#1E3A5F;">GV</span>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;font-weight:600;color:#1B2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Gate Valve · CI</div>
+          <div style="display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;"><span class="spectag">50 mm</span></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div class="mono" style="font-size:14.5px;font-weight:700;color:#142943;">8</div>
+          <div style="font-size:10px;color:#8B93A0;text-align:right;">Nos</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Electrical -->
+    <div style="display:flex;align-items:center;gap:6px;margin:2px 2px 6px;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="#E07B1E"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>
+      <span class="mono" style="font-size:10.5px;font-weight:700;color:#E07B1E;letter-spacing:0.5px;text-transform:uppercase;">Electrical</span>
+    </div>
+
+    <div style="border:1px solid #C4DCE6;border-radius:14px;overflow:hidden;margin-bottom:12px;box-shadow:0 2px 6px rgba(20,41,67,0.06);">
+      <div class="grouphead" style="background:#FBE7CF;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5B6572" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        <span style="flex:1;font-size:12.5px;font-weight:700;color:#142943;">Power Cable</span>
+        <span class="mono" style="font-size:11px;color:#5B6572;">1</span>
+      </div>
+      <div class="itemrow">
+        <div style="width:38px;height:38px;border-radius:10px;background:#FBE7CF;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="mono" style="font-size:11px;font-weight:700;color:#8A5316;">PC</span>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;font-weight:600;color:#1B2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Power Cable · Copper</div>
+          <div style="display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;"><span class="spectag">4 sq.mm</span><span class="spectag">4C</span></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div class="mono" style="font-size:14.5px;font-weight:700;color:#142943;">620</div>
+          <div style="font-size:10px;color:#8B93A0;text-align:right;">m</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border:1px solid #C4DCE6;border-radius:14px;overflow:hidden;margin-bottom:12px;box-shadow:0 2px 6px rgba(20,41,67,0.06);">
+      <div class="grouphead" style="background:#FBE7CF;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5B6572" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        <span style="flex:1;font-size:12.5px;font-weight:700;color:#142943;">Cable Management</span>
+        <span class="mono" style="font-size:11px;color:#5B6572;">1</span>
+      </div>
+      <div class="itemrow">
+        <div style="width:38px;height:38px;border-radius:10px;background:#FBE7CF;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="mono" style="font-size:11px;font-weight:700;color:#8A5316;">CT</span>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;font-weight:600;color:#1B2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Cable Tray · GI</div>
+          <div style="display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;"><span class="spectag">150 mm</span></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div class="mono" style="font-size:14.5px;font-weight:700;color:#142943;">140</div>
+          <div style="font-size:10px;color:#8B93A0;text-align:right;">m</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border:1px solid #C4DCE6;border-radius:14px;overflow:hidden;margin-bottom:8px;box-shadow:0 2px 6px rgba(20,41,67,0.06);">
+      <div class="grouphead" style="background:#FBE7CF;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5B6572" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        <span style="flex:1;font-size:12.5px;font-weight:700;color:#142943;">Cable Accessory</span>
+        <span class="mono" style="font-size:11px;color:#5B6572;">2</span>
+      </div>
+      <div class="itemrow">
+        <div style="width:38px;height:38px;border-radius:10px;background:#FBE7CF;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="mono" style="font-size:11px;font-weight:700;color:#8A5316;">CG</span>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;font-weight:600;color:#1B2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Cable Gland · Brass</div>
+          <div style="display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;"><span class="spectag">20 mm</span></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div class="mono" style="font-size:14.5px;font-weight:700;color:#142943;">64</div>
+          <div style="font-size:10px;color:#8B93A0;text-align:right;">Nos</div>
+        </div>
+      </div>
+      <div class="itemrow">
+        <div style="width:38px;height:38px;border-radius:10px;background:#FBE7CF;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <span class="mono" style="font-size:11px;font-weight:700;color:#8A5316;">CL</span>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;font-weight:600;color:#1B2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Cable Lug · Copper</div>
+          <div style="display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;"><span class="spectag">6 sq.mm</span></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div class="mono" style="font-size:14.5px;font-weight:700;color:#142943;">64</div>
+          <div style="font-size:10px;color:#8B93A0;text-align:right;">Nos</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- sticky bottom action bar -->
+  <div style="flex-shrink:0;background:#E8F1F6;border-top:1px solid #C4DCE6;padding:12px 14px 18px;display:flex;align-items:center;gap:12px;">
+    <div style="flex-shrink:0;">
+      <div class="mono" style="font-size:15px;font-weight:700;color:#142943;">10 items</div>
+      <div style="font-size:10.5px;color:#5B6572;margin-top:1px;">2 trades · 6 families</div>
+    </div>
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:8px;background:#E07B1E;border-radius:12px;padding:14px 0;box-shadow:0 6px 14px rgba(224,123,30,0.28);cursor:pointer;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      <span style="color:#FFFFFF;font-weight:700;font-size:14.5px;">Add Item</span>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>
