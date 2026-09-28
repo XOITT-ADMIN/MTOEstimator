@@ -3,7 +3,8 @@ import { z } from "zod";
 
 import { requireMember } from "../lib/access.js";
 import { badRequest, conflict, forbidden, notFound } from "../lib/errors.js";
-import { canPerform, findTransition, isMtoStatus, statusesWaitingOnRoles, STATUSES_WAITING_ON_CREATOR } from "../lib/mtoStatus.js";
+import { canPerform, findTransition, isMtoStatus, NOTIFY_ON_REACH, statusesWaitingOnRoles, STATUSES_WAITING_ON_CREATOR } from "../lib/mtoStatus.js";
+import { toNum } from "../lib/num.js";
 import type { Deps } from "../app.js";
 
 const transitionSchema = z.object({
@@ -11,9 +12,17 @@ const transitionSchema = z.object({
   comment: z.string().trim().max(2000).optional().default(""),
 });
 
-// The approval workflow: moving an MTO between statuses, the "waiting for you" inbox, and the
-// History tab. See XMTO_BUILD_BRIEF.md section 5 and section 8.
-export async function mtoRoutes(app: FastifyInstance, { db, hub }: Deps) {
+const procurementSchema = z.object({
+  lines: z.array(
+    z.object({
+      lineId:      z.string().min(1),
+      issueQty:    z.number().min(0),
+      purchaseQty: z.number().min(0),
+    })
+  ).min(1),
+});
+
+export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps) {
   const auth = { onRequest: [app.authenticate] };
 
   // "Waiting for you" (by role) plus "My MTOs" (mine, whatever their status).
@@ -32,7 +41,11 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub }: Deps) {
         : Promise.resolve([]),
       db.estimate.findMany({ where: { companyId: m.companyId, deletedAt: null, createdById: m.userId }, orderBy: { updatedAt: "desc" }, take: 100 }),
     ]);
-    return { waiting: waiting.map((r) => r.data), mine: mine.map((r) => r.data) };
+    return {
+      waiting: waiting.map((r) => r.data),
+      mine: mine.map((r) => r.data),
+      waitingCount: waiting.length,
+    };
   });
 
   app.get<{ Params: { id: string } }>("/mtos/:id/history", auth, async (req) => {
@@ -62,7 +75,6 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub }: Deps) {
     const { id } = req.params;
 
     const result = await db.$transaction(async (tx) => {
-      // Lock the row so two people acting on the same MTO at once are serialised, not racing.
       const rows = await tx.$queryRaw<{ status: string; data: unknown; createdById: string; projectId: string; deletedAt: Date | null }[]>`
         SELECT "status", "data", "createdById", "projectId", "deletedAt" FROM "Estimate"
         WHERE "companyId" = ${m.companyId} AND "id" = ${id} FOR UPDATE`;
@@ -71,7 +83,7 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub }: Deps) {
 
       const rule = findTransition(row.status, body.to);
       if (!rule) {
-        throw forbidden(`This MTO is "${row.status}" now — someone may have already moved it. Refresh and try again.`);
+        throw conflict(`This MTO is "${row.status}" now — someone may have already moved it. Refresh and try again.`);
       }
       if (!canPerform(m.roles, rule)) throw forbidden("You don't have the role to make that move.");
       if (rule.requireOwnMto && !m.roles.includes("owner") && !m.roles.includes("admin") && row.createdById !== m.userId) {
@@ -86,6 +98,18 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub }: Deps) {
         if (!project || project.status !== "open") throw conflict("That project is closed — this MTO needs an open project.", "project_closed");
       }
 
+      // Phase 3: READY_TO_DISPATCH only when every line is fully issued
+      if (body.to === "READY_TO_DISPATCH") {
+        const lines = await tx.estimateLine.findMany({
+          where: { companyId: m.companyId, estimateId: id },
+          select: { qty: true, issuedQty: true },
+        });
+        const notFullyIssued = lines.filter((l) => toNum(l.issuedQty) < toNum(l.qty));
+        if (notFullyIssued.length > 0) {
+          throw badRequest(`${notFullyIssued.length} line(s) still need to be fully issued before marking Ready to dispatch.`);
+        }
+      }
+
       const now = new Date();
       const nextData = { ...(row.data as Record<string, unknown>), status: body.to };
       await tx.estimate.update({
@@ -94,25 +118,166 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub }: Deps) {
           status: body.to,
           data: nextData,
           ...(body.to === "SUBMITTED" ? { submittedAt: now } : {}),
-          ...(body.to === "CLOSED" ? { closedAt: now } : {}),
+          ...(body.to === "CLOSED"    ? { closedAt:    now } : {}),
         },
       });
       await tx.mtoEvent.create({
         data: {
-          companyId: m.companyId,
+          companyId:  m.companyId,
           estimateId: id,
-          actorId: m.userId,
-          actorName: m.name,
+          actorId:    m.userId,
+          actorName:  m.name,
           fromStatus: row.status,
-          toStatus: body.to,
-          action: "transition",
-          comment: body.comment || null,
+          toStatus:   body.to,
+          action:     "transition",
+          comment:    body.comment || null,
         },
       });
-      return nextData;
+      return { nextData, createdById: row.createdById, projectId: row.projectId };
     });
 
     hub.publish(m.companyId, "estimates", { by: m.userId });
-    return { item: result };
+
+    // Phase 2: fire-and-forget email to relevant roles. Never blocks the response.
+    sendTransitionEmail({ db, mailer, companyId: m.companyId, estimateId: id, toStatus: body.to, actorName: m.name, comment: body.comment, createdById: result.createdById, mtoData: result.nextData }).catch(() => {});
+
+    return { item: result.nextData };
   });
+
+  // Phase 3: Procurement records how much to issue from stock and how much to buy externally.
+  // Issues deduct from StockLine.onHand immediately (with a FOR UPDATE lock). Purchases are
+  // recorded as "to buy" (purchasedQty on the line) — the actual stock receipt comes later via
+  // POST /stock/receipts, which adds back to stock before the next issue step.
+  app.post<{ Params: { id: string } }>("/mtos/:id/procurement", auth, async (req) => {
+    const m = await requireMember(db, req);
+    if (!m.roles.includes("procurement") && !m.roles.includes("owner") && !m.roles.includes("admin")) {
+      throw forbidden("Only Procurement, Admin or Owner can issue stock for an MTO.");
+    }
+    const body = procurementSchema.parse(req.body);
+    const { id } = req.params;
+
+    // Verify MTO belongs to this company and is in a procurable status
+    const mto = await db.estimate.findUnique({
+      where: { companyId_id: { companyId: m.companyId, id } },
+      select: { status: true, deletedAt: true },
+    });
+    if (!mto || mto.deletedAt) throw notFound("MTO not found.");
+    if (mto.status !== "BUDGET_OK" && mto.status !== "READY_TO_DISPATCH") {
+      throw badRequest(`Can only issue stock for an MTO in Budget OK status (this one is "${mto.status}").`);
+    }
+
+    const updatedLines = await db.$transaction(async (tx) => {
+      const results: { lineId: string; issuedQty: number; purchasedQty: number }[] = [];
+
+      for (const entry of body.lines) {
+        if (entry.issueQty === 0 && entry.purchaseQty === 0) continue;
+
+        const line = await tx.estimateLine.findUnique({
+          where: { companyId_estimateId_lineId: { companyId: m.companyId, estimateId: id, lineId: entry.lineId } },
+        });
+        if (!line) throw notFound(`Line "${entry.lineId}" not found.`);
+
+        if (entry.issueQty > 0) {
+          // Lock the stock line and check availability
+          const stockRows = await tx.$queryRaw<{ key: string; onHand: string }[]>`
+            SELECT "key", "onHand" FROM "StockLine"
+            WHERE "companyId" = ${m.companyId} AND "key" = ${line.stockKey} FOR UPDATE`;
+          const stock = stockRows[0];
+          if (!stock) throw badRequest(`No stock line found for "${line.stockKey}". Add it to the stock library first.`);
+
+          const available = toNum(stock.onHand);
+          if (entry.issueQty > available) {
+            throw badRequest(`Only ${available} ${line.stockKey.split("|")[5] || "units"} in stock for "${line.stockKey.split("|")[2]} · ${line.stockKey.split("|")[1]} · ${line.stockKey.split("|")[3]}".`);
+          }
+
+          await tx.$executeRaw`
+            UPDATE "StockLine" SET "onHand" = "onHand" - ${entry.issueQty}
+            WHERE "companyId" = ${m.companyId} AND "key" = ${line.stockKey}`;
+
+          await tx.stockMovement.create({
+            data: {
+              companyId:   m.companyId,
+              stockLineId: line.stockKey,
+              type:        "ISSUE",
+              qty:         entry.issueQty,
+              estimateId:  id,
+              createdById: m.userId,
+            },
+          });
+        }
+
+        await tx.estimateLine.update({
+          where: { companyId_estimateId_lineId: { companyId: m.companyId, estimateId: id, lineId: entry.lineId } },
+          data: {
+            issuedQty:    { increment: entry.issueQty },
+            purchasedQty: { increment: entry.purchaseQty },
+          },
+        });
+
+        results.push({
+          lineId:      entry.lineId,
+          issuedQty:   toNum(line.issuedQty) + entry.issueQty,
+          purchasedQty: toNum(line.purchasedQty) + entry.purchaseQty,
+        });
+      }
+
+      return results;
+    });
+
+    hub.publish(m.companyId, "stock", { by: m.userId });
+    hub.publish(m.companyId, "estimates", { by: m.userId });
+    return { lines: updatedLines };
+  });
+}
+
+// Phase 2: resolve who to email and send it. Runs outside the transaction.
+async function sendTransitionEmail({ db, mailer, companyId, estimateId, toStatus, actorName, comment, createdById, mtoData }: {
+  db: Parameters<typeof mtoRoutes>[1]["db"];
+  mailer: Parameters<typeof mtoRoutes>[1]["mailer"];
+  companyId: string;
+  estimateId: string;
+  toStatus: string;
+  actorName: string;
+  comment: string;
+  createdById: string;
+  mtoData: unknown;
+}) {
+  if (!mailer.enabled) return;
+  const notify = NOTIFY_ON_REACH[toStatus as keyof typeof NOTIFY_ON_REACH];
+  if (!notify || !notify.length) return;
+
+  const data = mtoData as Record<string, unknown>;
+  const number = data.estimateNumber as string || estimateId;
+  const name   = data.name as string || "";
+
+  const members = await db.membership.findMany({
+    where: { companyId },
+    include: { user: true },
+  });
+
+  const recipients = new Set<string>();
+  for (const target of notify) {
+    if (target === "creator") {
+      const creator = members.find((mem) => mem.userId === createdById);
+      if (creator) recipients.add(creator.user.email);
+    } else {
+      for (const mem of members) {
+        if ((mem.roles as string[]).includes(target)) recipients.add(mem.user.email);
+      }
+    }
+  }
+
+  if (!recipients.size) return;
+
+  const subject = `${number} moved to ${toStatus.replace(/_/g, " ")}`;
+  const body = [
+    `MTO ${number} — ${name}`,
+    `Status: ${toStatus.replace(/_/g, " ")}`,
+    `By: ${actorName}`,
+    comment ? `Comment: ${comment}` : "",
+  ].filter(Boolean).join("\n");
+
+  for (const email of recipients) {
+    mailer.send(email, subject, body).catch(() => {});
+  }
 }

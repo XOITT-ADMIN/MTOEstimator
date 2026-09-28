@@ -8,6 +8,7 @@ import { parseStockCsv, StockCsvError } from "../../inventory/stockCsv";
 import { saveTextFile, pickTextFile } from "../../utils/files";
 import { confirmAction, notify } from "../../utils/confirm";
 import { LineEditorSheet, BulkSheet, AddLineSheet } from "./StockSheets";
+import { StockMovementsSheet } from "./StockMovementsSheet";
 
 const UNIT_WORDS = { m: "Metres", Nos: "Nos", Set: "Sets", Kg: "Kg", L: "Litres" };
 
@@ -18,6 +19,7 @@ export function StockTab({ query = "" }) {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const [editing, setEditing] = useState(null);
+  const [movementsLine, setMovementsLine] = useState(null); // key + label for ledger sheet
   const [bulkOpen, setBulkOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -181,7 +183,8 @@ export function StockTab({ query = "" }) {
         ))
       )}
 
-      {editing ? <LineEditorSheet key={editing.key} line={lines.find((l) => l.key === editing.key) || editing} onClose={() => setEditing(null)} onSave={(patch) => { updateLine(editing.key, patch); setEditing(null); }} onRemove={() => remove(editing)} /> : null}
+      {editing ? <LineEditorSheet key={editing.key} line={lines.find((l) => l.key === editing.key) || editing} onClose={() => setEditing(null)} onSave={(patch) => { updateLine(editing.key, patch); setEditing(null); }} onRemove={() => remove(editing)} onMovements={() => { setMovementsLine({ key: editing.key, label: `${editing.item} · ${specLabel(editing)}` }); setEditing(null); }} /> : null}
+      {movementsLine ? <StockMovementsSheet stockLineId={movementsLine.key} lineLabel={movementsLine.label} onClose={() => setMovementsLine(null)} /> : null}
       {bulkOpen ? <BulkSheet count={selected.size} onClose={() => setBulkOpen(false)} onApply={(patch) => { bulkUpdate(Array.from(selected), patch); setBulkOpen(false); exitSelect(); }} /> : null}
       {addOpen ? <AddLineSheet onClose={() => setAddOpen(false)} onSave={(entry) => { upsertLine(entry); setAddOpen(false); }} /> : null}
     </View>

@@ -384,3 +384,137 @@ describe("mto workflow", () => {
     assert.equal((await call("GET", "/sync/stock", "nope")).status, 401);
   });
 });
+
+describe("procurement + stock ledger (Phase 3)", () => {
+  let projectId: string;
+  let procurement: string;
+
+  before(async () => {
+    // Give owner a procurement role for these tests
+    const members = await call("GET", "/members", owner);
+    const ownerMem = members.json.find((x: J) => x.email === "owner@test.dev");
+    await call("PATCH", `/members/${ownerMem.id}`, owner, { roles: ["owner", "procurement"] });
+
+    projectId = (await call("GET", "/projects", owner)).json.find((p: J) => p.name === "Whitefield Tower").id;
+    // add a procurement-only user
+    await call("POST", "/invites", owner, { email: "proc@test.dev", name: "Preet", roles: ["procurement"] });
+    procurement = await signIn("proc@test.dev", "Preet");
+    await call("GET", "/me", procurement); // accept invite
+  });
+
+  test("inbox includes BUDGET_OK for procurement role", async () => {
+    // e1-a is BUDGET_OK from the workflow tests above
+    const inbox = await call("GET", "/mtos/inbox", procurement);
+    assert.ok(inbox.json.waiting.some((e: J) => e.id === "e1-a"), JSON.stringify(inbox.json.waiting));
+    assert.ok(typeof inbox.json.waitingCount === "number");
+  });
+
+  test("only procurement/admin can call the procurement endpoint", async () => {
+    const r = await call("POST", "/mtos/e1-a/procurement", eng1, { lines: [{ lineId: "e1-a-l1", issueQty: 1, purchaseQty: 0 }] });
+    assert.equal(r.status, 403);
+  });
+
+  test("procurement refused on wrong status", async () => {
+    // e1-c is SUBMITTED — not Budget OK
+    const r = await call("POST", "/mtos/e1-c/procurement", procurement, { lines: [{ lineId: "e1-c-l1", issueQty: 1, purchaseQty: 0 }] });
+    assert.equal(r.status, 400);
+    assert.match(r.json.error, /Budget OK/);
+  });
+
+  test("issuing more than in stock is refused", async () => {
+    // Stock is 50 from the websocket test; e1-a has 3 m (updated in the workflow tests)
+    const r = await call("POST", "/mtos/e1-a/procurement", procurement, {
+      lines: [{ lineId: "e1-a-l1", issueQty: 9999, purchaseQty: 0 }],
+    });
+    assert.equal(r.status, 400);
+    assert.match(r.json.error, /in stock/);
+  });
+
+  test("issue from stock lowers onHand and creates a movement", async () => {
+    const stockBefore = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+
+    const r = await call("POST", "/mtos/e1-a/procurement", procurement, {
+      lines: [{ lineId: "e1-a-l1", issueQty: 3, purchaseQty: 0 }],
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.lines[0].issuedQty, 3);
+
+    const stockAfter = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+    assert.equal(stockAfter, stockBefore - 3);
+
+    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}`, owner);
+    assert.ok(movements.json.some((m: J) => m.type === "ISSUE" && m.qty === 3));
+  });
+
+  test("receive purchased items raises onHand", async () => {
+    const stockBefore = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+
+    const r = await call("POST", "/stock/receipts", procurement, {
+      lines: [{ stockLineId: PIPE_KEY, qty: 10, estimateId: "e1-a" }],
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.receipts[0].qty, 10);
+
+    const stockAfter = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+    assert.equal(stockAfter, stockBefore + 10);
+
+    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}`, owner);
+    assert.ok(movements.json.some((m: J) => m.type === "RECEIPT" && m.qty === 10));
+  });
+
+  test("manual adjust with reason changes stock", async () => {
+    const stockBefore = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+
+    const r = await call("POST", "/stock/adjust", procurement, {
+      stockLineId: PIPE_KEY, qty: -5, reason: "Damaged pipes removed",
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+
+    const stockAfter = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+    assert.equal(stockAfter, stockBefore - 5);
+
+    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}`, owner);
+    assert.ok(movements.json.some((m: J) => m.type === "ADJUST" && m.reason === "Damaged pipes removed"));
+  });
+
+  test("adjust without reason is refused", async () => {
+    const r = await call("POST", "/stock/adjust", procurement, { stockLineId: PIPE_KEY, qty: 1 });
+    assert.equal(r.status, 400);
+  });
+
+  test("adjust that would push stock below zero is refused", async () => {
+    const stock = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+    const r = await call("POST", "/stock/adjust", procurement, { stockLineId: PIPE_KEY, qty: -(stock + 999), reason: "test" });
+    assert.equal(r.status, 400);
+    assert.match(r.json.error, /below zero/);
+  });
+
+  test("ready to dispatch refused if not all lines issued", async () => {
+    // e1-c is still SUBMITTED — need to push it to BUDGET_OK first for this check
+    // Use a fresh MTO instead: create, submit, approve, budget OK, then try to dispatch
+    await call("POST", "/sync/estimates", eng1, { upserts: [estimate("e1-d", projectId, 10)] });
+    await call("POST", "/mtos/e1-d/transition", eng1, { to: "SUBMITTED" });
+    await call("POST", "/mtos/e1-d/transition", pm, { to: "APPROVED" });
+    await call("POST", "/mtos/e1-d/transition", finance, { to: "BUDGET_OK" });
+
+    // Try to mark ready to dispatch without issuing — server refuses
+    const r = await call("POST", "/mtos/e1-d/transition", procurement, { to: "READY_TO_DISPATCH" });
+    assert.equal(r.status, 400);
+    assert.match(r.json.error, /fully issued/);
+  });
+
+  test("ready to dispatch succeeds once all lines are issued", async () => {
+    // Issue the full 10 m for e1-d
+    const issueR = await call("POST", "/mtos/e1-d/procurement", procurement, {
+      lines: [{ lineId: "e1-d-l1", issueQty: 10, purchaseQty: 0 }],
+    });
+    assert.equal(issueR.status, 200, JSON.stringify(issueR.json));
+
+    const dispatch = await call("POST", "/mtos/e1-d/transition", procurement, { to: "READY_TO_DISPATCH" });
+    assert.equal(dispatch.status, 200, JSON.stringify(dispatch.json));
+    assert.equal(dispatch.json.item.status, "READY_TO_DISPATCH");
+
+    const hist = await call("GET", "/mtos/e1-d/history", owner);
+    assert.ok(hist.json.some((h: J) => h.to === "READY_TO_DISPATCH"));
+  });
+});

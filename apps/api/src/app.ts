@@ -17,6 +17,7 @@ import { libraryRoutes } from "./routes/library.js";
 import { mtoRoutes } from "./routes/mtos.js";
 import { projectRoutes } from "./routes/projects.js";
 import { realtimeRoutes } from "./routes/realtime.js";
+import { stockRoutes } from "./routes/stock.js";
 import { syncRoutes } from "./routes/sync.js";
 
 export interface Deps {
@@ -90,6 +91,7 @@ export async function buildApp({ db, env, mailer, logger = true }: { db: Db; env
   await app.register(async (s) => libraryRoutes(s, deps));
   await app.register(async (s) => projectRoutes(s, deps));
   await app.register(async (s) => mtoRoutes(s, deps));
+  await app.register(async (s) => stockRoutes(s, deps));
   await app.register(async (s) => realtimeRoutes(s, deps));
 
   // Returned as a pair: a Fastify instance is "thenable", so `await` would unwrap it.

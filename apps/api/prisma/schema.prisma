@@ -70,13 +70,14 @@ model Company {
   estimateSeq Int      @default(0)
   createdAt   DateTime @default(now())
 
-  members   Membership[]
-  invites   Invite[]
-  estimates Estimate[]
-  stock     StockLine[]
-  rates     RateOverride[]
-  catalogs  CatalogVersion[]
-  projects  Project[]
+  members        Membership[]
+  invites        Invite[]
+  estimates      Estimate[]
+  stock          StockLine[]
+  rates          RateOverride[]
+  catalogs       CatalogVersion[]
+  projects       Project[]
+  stockMovements StockMovement[]
 }
 
 model Membership {
@@ -158,6 +159,7 @@ model Estimate {
   project         Project        @relation(fields: [projectId], references: [id])
   lines           EstimateLine[]
   events          MtoEvent[]
+  dispatches      Dispatch[]
 
   @@id([companyId, id])
   @@index([companyId, createdById])
@@ -185,12 +187,14 @@ model MtoEvent {
 
 // One row per estimate line that draws on stock (i.e. not in a released status like Rejected).
 model EstimateLine {
-  companyId  String
-  estimateId String
-  lineId     String
-  stockKey   String
-  qty        Decimal  @db.Decimal(14, 2)
-  estimate   Estimate @relation(fields: [companyId, estimateId], references: [companyId, id], onDelete: Cascade)
+  companyId    String
+  estimateId   String
+  lineId       String
+  stockKey     String
+  qty          Decimal @db.Decimal(14, 2)
+  issuedQty    Decimal @default(0) @db.Decimal(14, 2) // issued from store for this line (Phase 3)
+  purchasedQty Decimal @default(0) @db.Decimal(14, 2) // bought for this line (received into stock first)
+  estimate     Estimate @relation(fields: [companyId, estimateId], references: [companyId, id], onDelete: Cascade)
 
   @@id([companyId, estimateId, lineId])
   @@index([companyId, stockKey])
@@ -214,6 +218,50 @@ model StockLine {
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@id([companyId, key])
+}
+
+enum MovementType {
+  RECEIPT // bought items received into store
+  ISSUE   // items issued from store for an MTO
+  RETURN  // leftover material returned to store (project close or cancel)
+  ADJUST  // manual correction by Procurement/Admin (reason required)
+}
+
+// Every stock in/out movement — the ledger that makes StockLine.onHand auditable.
+model StockMovement {
+  id          String       @id @default(cuid())
+  companyId   String
+  stockLineId String       // StockLine.key (compound PK: companyId + key)
+  type        MovementType
+  qty         Decimal      @db.Decimal(14, 2) // always positive; ISSUE/RETURN direction implied by type; ADJUST signed
+  estimateId  String?      // which MTO this movement is for
+  projectId   String?
+  reason      String?      // required for ADJUST
+  createdById String
+  createdAt   DateTime     @default(now())
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, stockLineId, createdAt])
+  @@index([companyId, estimateId])
+}
+
+// A dispatch record for an MTO (loading, transport, delivery). Phase 4 builds the full flow.
+model Dispatch {
+  id           String    @id @default(cuid())
+  companyId    String
+  estimateId   String
+  loadingCheck Boolean   @default(false)
+  loadingCost  Decimal   @default(0) @db.Decimal(14, 2)
+  vehicle      String?
+  driver       String?
+  notes        String?
+  dispatchedAt DateTime?
+  deliveredAt  DateTime?
+  createdById  String
+  createdAt    DateTime  @default(now())
+  estimate     Estimate  @relation(fields: [companyId, estimateId], references: [companyId, id], onDelete: Cascade)
+
+  @@index([companyId, estimateId])
 }
 
 // Company-specific rates. Anything not here falls back to the default rates in packages/shared.

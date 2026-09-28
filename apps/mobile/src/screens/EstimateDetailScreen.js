@@ -8,6 +8,7 @@ import { DetailsTab } from "../features/estimate/DetailsTab";
 import { SummaryTab } from "../features/estimate/SummaryTab";
 import { HistoryTab } from "../features/estimate/HistoryTab";
 import { ActionBar } from "../features/estimate/ActionBar";
+import { ProcurementTab } from "../features/estimate/ProcurementTab";
 import { money, plural } from "../features/estimates";
 import { useEstimates } from "../context/EstimatesContext";
 import { useCompany } from "../context/CompanyContext";
@@ -90,6 +91,8 @@ export default function EstimateDetailScreen({ route, navigation }) {
           />
         ) : tab === "details" ? (
           <DetailsTab estimate={estimate} update={update} canEdit={canEdit} />
+        ) : tab === "procurement" ? (
+          <ProcurementTab estimate={estimate} roles={roles} onProcured={() => {}} />
         ) : tab === "history" ? (
           <HistoryTab estimateId={estimate.id} fetchHistory={fetchHistory} />
         ) : (

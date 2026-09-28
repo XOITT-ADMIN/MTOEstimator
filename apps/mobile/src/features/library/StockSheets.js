@@ -16,8 +16,8 @@ export const fmtQty = (n) => {
 
 const priceInput = (v) => v.replace(/[^0-9.]/g, "");
 
-// Change stock on hand and unit price for one line (or remove it).
-export function LineEditorSheet({ line, onClose, onSave, onRemove }) {
+// Change stock on hand and unit price for one line (or remove it). onMovements opens the ledger.
+export function LineEditorSheet({ line, onClose, onSave, onRemove, onMovements }) {
   const [qty, setQty] = useState(line ? String(line.stock) : "");
   const [price, setPrice] = useState(line && Number(line.price) ? String(line.price) : "");
   const n = Number(qty);
@@ -33,6 +33,7 @@ export function LineEditorSheet({ line, onClose, onSave, onRemove }) {
       footer={
         <View style={{ flexDirection: "row", gap: 10 }}>
           <Button title="Remove" tone="danger" onPress={onRemove} style={{ paddingHorizontal: 18 }} />
+          {onMovements ? <Button title="Ledger" tone="secondary" onPress={onMovements} style={{ paddingHorizontal: 18 }} /> : null}
           <Button title="Save" icon="check" disabled={!valid} onPress={() => onSave({ stock: n, price: p })} style={{ flex: 1 }} />
         </View>
       }

@@ -36,16 +36,19 @@ export interface TransitionRule {
   requireOwnMto?: boolean; // the caller must have created the MTO, unless they're owner/admin
 }
 
-// Phase 1's wired moves. (Cancel, and everything from Budget OK onward, is Phase 3/4/5.)
+// Approval loop (Phase 1) + procurement trigger (Phase 3). Cancel and logistics moves Phase 4.
 export const TRANSITIONS: TransitionRule[] = [
-  { from: "DRAFT", to: "SUBMITTED", roles: ["site_supervisor"], requireOwnMto: true },
-  { from: "SUBMITTED", to: "APPROVED", roles: ["project_manager"] },
-  { from: "SUBMITTED", to: "REJECTED", roles: ["project_manager"], commentRequired: true },
-  { from: "REJECTED", to: "SUBMITTED", roles: ["site_supervisor"], requireOwnMto: true },
-  { from: "APPROVED", to: "BUDGET_OK", roles: ["finance"] },
-  { from: "APPROVED", to: "SENT_BACK", roles: ["finance"], commentRequired: true },
-  { from: "SENT_BACK", to: "APPROVED", roles: ["project_manager"] },
-  { from: "SENT_BACK", to: "REJECTED", roles: ["project_manager"], commentRequired: true },
+  { from: "DRAFT",     to: "SUBMITTED",        roles: ["site_supervisor"], requireOwnMto: true },
+  { from: "SUBMITTED", to: "APPROVED",          roles: ["project_manager"] },
+  { from: "SUBMITTED", to: "REJECTED",          roles: ["project_manager"], commentRequired: true },
+  { from: "REJECTED",  to: "SUBMITTED",         roles: ["site_supervisor"], requireOwnMto: true },
+  { from: "APPROVED",  to: "BUDGET_OK",         roles: ["finance"] },
+  { from: "APPROVED",  to: "SENT_BACK",         roles: ["finance"], commentRequired: true },
+  { from: "SENT_BACK", to: "APPROVED",          roles: ["project_manager"] },
+  { from: "SENT_BACK", to: "REJECTED",          roles: ["project_manager"], commentRequired: true },
+  // Phase 3: Procurement marks "Ready to dispatch" once every line is fully issued.
+  // The endpoint enforces that guard; the transition rule records who can trigger it.
+  { from: "BUDGET_OK", to: "READY_TO_DISPATCH", roles: ["procurement"] },
 ];
 
 // A member's roles, expanded the way the brief's role table describes: Owner can do anything;
@@ -71,9 +74,11 @@ export function canPerform(memberRoles: Role[], rule: TransitionRule): boolean {
 // Which statuses are "waiting" on at least one of these roles to act (used by the Inbox).
 // Rejected isn't listed here — it waits on the MTO's own creator, handled separately.
 const WAITING_ON: Partial<Record<MtoStatus, Role[]>> = {
-  SUBMITTED: ["project_manager"],
-  APPROVED: ["finance"],
-  SENT_BACK: ["project_manager"],
+  SUBMITTED:        ["project_manager"],
+  APPROVED:         ["finance"],
+  SENT_BACK:        ["project_manager"],
+  BUDGET_OK:        ["procurement"],      // Phase 3: procurement sees it
+  READY_TO_DISPATCH:["logistics"],        // Phase 4: logistics picks it up
 };
 
 export function statusesWaitingOnRoles(roles: Role[]): MtoStatus[] {
@@ -82,3 +87,16 @@ export function statusesWaitingOnRoles(roles: Role[]): MtoStatus[] {
 }
 
 export const STATUSES_WAITING_ON_CREATOR: MtoStatus[] = ["REJECTED"];
+
+// Phase 2: who to email when an MTO reaches each status.
+// "creator" means the person who made the MTO (site_supervisor).
+export const NOTIFY_ON_REACH: Partial<Record<MtoStatus, Array<Role | "creator">>> = {
+  SUBMITTED:        ["project_manager"],
+  REJECTED:         ["creator"],
+  APPROVED:         ["finance"],
+  SENT_BACK:        ["project_manager"],
+  BUDGET_OK:        ["procurement"],
+  READY_TO_DISPATCH:["logistics"],
+  DELIVERED:        ["creator", "project_manager"],
+  CANCELLED:        ["owner", "admin", "project_manager", "finance", "procurement", "logistics", "site_supervisor"],
+};

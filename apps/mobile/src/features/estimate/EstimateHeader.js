@@ -33,6 +33,7 @@ export function EstimateHeader({ estimate, tab, onTab, onBack, onPdf }) {
         tabs={[
           { key: "details", label: "Details" },
           { key: "items", label: "Items", count: estimate.items.length },
+          { key: "procurement", label: "Procure" },
           { key: "summary", label: "Summary" },
           { key: "history", label: "History" },
         ]}

@@ -18,16 +18,18 @@ export const MTO_STATUSES = [
   "CANCELLED",
 ];
 
-// Phase 1's wired moves. (Cancel, and everything from Budget OK onward, is Phase 3/4/5.)
+// Phase 1 approval loop + Phase 3 procurement trigger. Cancel and logistics moves Phase 4.
 export const TRANSITIONS = [
-  { from: "DRAFT", to: "SUBMITTED", roles: ["site_supervisor"], requireOwnMto: true, label: "Submit" },
-  { from: "SUBMITTED", to: "APPROVED", roles: ["project_manager"], label: "Approve" },
-  { from: "SUBMITTED", to: "REJECTED", roles: ["project_manager"], commentRequired: true, label: "Reject", tone: "danger" },
-  { from: "REJECTED", to: "SUBMITTED", roles: ["site_supervisor"], requireOwnMto: true, label: "Resubmit" },
-  { from: "APPROVED", to: "BUDGET_OK", roles: ["finance"], label: "Mark budget OK" },
-  { from: "APPROVED", to: "SENT_BACK", roles: ["finance"], commentRequired: true, label: "Send back", tone: "danger" },
-  { from: "SENT_BACK", to: "APPROVED", roles: ["project_manager"], label: "Re-approve" },
-  { from: "SENT_BACK", to: "REJECTED", roles: ["project_manager"], commentRequired: true, label: "Reject", tone: "danger" },
+  { from: "DRAFT",     to: "SUBMITTED",         roles: ["site_supervisor"], requireOwnMto: true, label: "Submit" },
+  { from: "SUBMITTED", to: "APPROVED",           roles: ["project_manager"], label: "Approve" },
+  { from: "SUBMITTED", to: "REJECTED",           roles: ["project_manager"], commentRequired: true, label: "Reject", tone: "danger" },
+  { from: "REJECTED",  to: "SUBMITTED",          roles: ["site_supervisor"], requireOwnMto: true, label: "Resubmit" },
+  { from: "APPROVED",  to: "BUDGET_OK",          roles: ["finance"], label: "Mark budget OK" },
+  { from: "APPROVED",  to: "SENT_BACK",          roles: ["finance"], commentRequired: true, label: "Send back", tone: "danger" },
+  { from: "SENT_BACK", to: "APPROVED",           roles: ["project_manager"], label: "Re-approve" },
+  { from: "SENT_BACK", to: "REJECTED",           roles: ["project_manager"], commentRequired: true, label: "Reject", tone: "danger" },
+  // Phase 3: Procurement moves to Ready to dispatch once all lines are issued
+  { from: "BUDGET_OK", to: "READY_TO_DISPATCH",  roles: ["procurement"], label: "Mark ready to dispatch" },
 ];
 
 // A member's roles, expanded the way the brief's role table describes: Owner can do anything;
@@ -53,9 +55,11 @@ export function canPerform(memberRoles, rule) {
 // Which statuses are "waiting" on at least one of these roles to act (used by the Inbox).
 // Rejected isn't listed here — it waits on the MTO's own creator, handled separately.
 const WAITING_ON = {
-  SUBMITTED: ["project_manager"],
-  APPROVED: ["finance"],
-  SENT_BACK: ["project_manager"],
+  SUBMITTED:         ["project_manager"],
+  APPROVED:          ["finance"],
+  SENT_BACK:         ["project_manager"],
+  BUDGET_OK:         ["procurement"],       // Phase 3
+  READY_TO_DISPATCH: ["logistics"],         // Phase 4
 };
 
 export function statusesWaitingOnRoles(roles) {
