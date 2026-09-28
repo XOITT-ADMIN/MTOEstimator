@@ -1,7 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { View, Pressable } from "react-native";
 
-import { Screen, Section, Blueprint, Card, Group, Row, IconTile, T, Icon, StatusBadge, TradePill, CountPill, SyncChip, EmptyState, HStack, XMark, Avatar, colors } from "../ui";
+import { Screen, Section, Blueprint, Card, Group, Row, IconTile, T, Icon, StatusBadge, TradePill, CountPill, SyncChip, EmptyState, HStack, XMark, Avatar, colors, STATUS_LABELS } from "../ui";
 import AccountMenu from "../components/AccountMenu";
 import { EstimateRow } from "../features/EstimateRow";
 import { summarize, greetingFor, money, moneyParts, plural, timeAgo } from "../features/estimates";
@@ -9,18 +9,33 @@ import { useSyncState } from "../features/sync";
 import { useEstimates } from "../context/EstimatesContext";
 import { useAuth } from "../context/AuthContext";
 import { useCompany } from "../context/CompanyContext";
+import { useProjects } from "../context/ProjectsContext";
 import { useInventory } from "../inventory/InventoryContext";
 import { confirmAction } from "../utils/confirm";
 
-// Home: greeting + sync, value card, the estimate to pick up, things that need attention, recent.
+// Home is now the Inbox: what's waiting on you, then your own MTOs, then the value card and
+// anything else that needs attention. See XMTO_BUILD_BRIEF.md section 9.
 export default function HomeScreen({ navigation }) {
-  const { estimates } = useEstimates();
+  const { estimates, fetchInbox } = useEstimates();
   const { user, signOut } = useAuth();
   const { profile, company, canManageTeam } = useCompany();
   const { lines: stockLines, getAvailability } = useInventory();
+  const { getProject } = useProjects();
   const sync = useSyncState();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [inbox, setInbox] = useState({ waiting: [], mine: [] });
 
+  useEffect(() => {
+    let alive = true;
+    fetchInbox()
+      .then((r) => alive && setInbox(r))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [fetchInbox, estimates]);
+
+  const waiting = useMemo(() => inbox.waiting.map((e) => summarize(e, { getAvailability })), [inbox.waiting, getAvailability]);
   const rows = useMemo(() => estimates.map((e) => summarize(e, { getAvailability })), [estimates, getAvailability]);
   const month = new Date().toLocaleDateString("en-IN", { month: "long" });
   const stats = useMemo(() => {
@@ -34,17 +49,16 @@ export default function HomeScreen({ navigation }) {
       value: thisMonth.reduce((a, r) => a + r.value, 0),
       estimates: thisMonth.length,
       items: thisMonth.reduce((a, r) => a + r.items, 0),
-      Draft: count("Draft"),
-      Ready: count("Ready"),
-      Sent: count("Sent"),
+      DRAFT: count("DRAFT"),
+      SUBMITTED: count("SUBMITTED"),
+      APPROVED: count("APPROVED"),
     };
   }, [rows, estimates]);
 
-  const pickUp = rows.find((r) => r.estimate.status === "Draft" && r.items > 0) || rows[0];
+  const pickUp = rows.find((r) => r.estimate.status === "DRAFT" && r.items > 0) || rows[0];
   const unpriced = rows.filter((r) => r.unpriced > 0);
   const unpricedCount = unpriced.reduce((a, r) => a + r.unpriced, 0);
-  const low = stockLines.filter((l) => l.available > 0 && l.available < l.stock * 0.25).length;
-  const out = stockLines.filter((l) => l.available <= 0).length;
+  const out = stockLines.filter((l) => l.stock <= 0).length;
   const recent = rows.filter((r) => r !== pickUp).slice(0, 3);
   const [whole, paise] = moneyParts(stats.value);
   const first = (user?.name || "").trim().split(/\s+/)[0] || "there";
@@ -97,9 +111,9 @@ export default function HomeScreen({ navigation }) {
         </View>
         <View style={{ flexDirection: "row", gap: 8 }}>
           {[
-            ["Draft", "Drafts", colors.warning],
-            ["Ready", "Ready", colors.blue500],
-            ["Sent", "Sent", colors.onNavyMuted],
+            ["DRAFT", "Drafts", colors.warning],
+            ["SUBMITTED", "Submitted", colors.blue500],
+            ["APPROVED", "Approved", colors.success],
           ].map(([key, label, dot]) => (
             <Pressable key={key} onPress={() => toList(key)} accessibilityRole="button" accessibilityLabel={`${stats[key]} ${label}`} style={({ pressed }) => ({ flex: 1, minHeight: 60, gap: 2, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, backgroundColor: pressed ? "rgba(255,255,255,0.14)" : colors.onNavyTile })}>
               <T size={20} weight={600} color="white" num style={{ lineHeight: 24 }}>
@@ -117,7 +131,18 @@ export default function HomeScreen({ navigation }) {
       </Blueprint>
 
       {estimates.length === 0 ? (
-        <EmptyState icon="fileText" title="No estimates yet" body="Walk the site, log what you see, and XMTO prices it for you." action="New estimate" onAction={() => navigation.navigate("NewEstimate")} style={{ marginTop: 24 }} />
+        <EmptyState icon="fileText" title="No MTOs yet" body="Walk the site, log what you see, and XMTO prices it for you." action="New MTO" onAction={() => navigation.navigate("NewEstimate")} style={{ marginTop: 24 }} />
+      ) : null}
+
+      {/* Waiting for you: submitted for your approval, or sent back to you as the creator */}
+      {waiting.length ? (
+        <Section title="Needs your action">
+          <Group>
+            {waiting.map((r) => (
+              <EstimateRow key={r.estimate.id} s={r} onPress={() => open(r.estimate.id)} showBy={canManageTeam} />
+            ))}
+          </Group>
+        </Section>
       ) : null}
 
       {/* Pick up where you left off */}
@@ -141,7 +166,7 @@ export default function HomeScreen({ navigation }) {
                 {pickUp.estimate.name}
               </T>
               <T variant="sub" style={{ marginTop: 2 }} numberOfLines={1}>
-                {[pickUp.estimate.client, pickUp.estimate.site].filter(Boolean).join(" · ") || "No client yet"}
+                {getProject(pickUp.estimate.projectId)?.name || "No project"}
               </T>
             </View>
             {pickUp.trades.length ? (
@@ -173,7 +198,7 @@ export default function HomeScreen({ navigation }) {
       ) : null}
 
       {/* Needs attention */}
-      {unpricedCount || low || out ? (
+      {unpricedCount || out ? (
         <Section title="Needs attention">
           <Group>
             {unpricedCount ? (
@@ -184,22 +209,17 @@ export default function HomeScreen({ navigation }) {
                 </T>
               </Row>
             ) : null}
-            {low || out ? (
+            {out ? (
               <Row
                 key="stock"
                 left={<IconTile icon="box" />}
                 onPress={() => navigation.navigate("Library", { section: "Stock" })}
                 minHeight={68}
-                right={
-                  <HStack gap={4}>
-                    {low ? <CountPill tone="warning">{low} low</CountPill> : null}
-                    {out ? <CountPill tone="danger">{out} out</CountPill> : null}
-                  </HStack>
-                }
+                right={<CountPill tone="danger">{out} out</CountPill>}
               >
                 <T variant="bodyStrong">Stock alerts</T>
                 <T variant="label" weight={400} numberOfLines={1}>
-                  {canManageTeam ? "Top up before they block estimates" : "Some items are running out"}
+                  {canManageTeam ? "Nothing on hand for these items" : "Some items are out of stock"}
                 </T>
               </Row>
             ) : null}

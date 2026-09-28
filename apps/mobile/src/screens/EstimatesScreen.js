@@ -1,31 +1,26 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { View } from "react-native";
 
-import { Screen, SearchField, Chip, ChipRow, Group, SwipeRow, EmptyState, T, HStack, Icon } from "../ui";
+import { Screen, SearchField, Chip, ChipRow, Group, SwipeRow, EmptyState, T, HStack, Icon, STATUS_LABELS } from "../ui";
 import { EstimateRow } from "../features/EstimateRow";
 import { summarize } from "../features/estimates";
 import { useEstimates } from "../context/EstimatesContext";
 import { useCompany } from "../context/CompanyContext";
 import { useInventory } from "../inventory/InventoryContext";
-import { confirmAction, notify } from "../utils/confirm";
+import { confirmAction } from "../utils/confirm";
 
-const FILTERS = ["All", "Draft", "Ready", "Sent", "Approved", "Plumbing", "Electrical"];
+const STATUS_FILTERS = ["DRAFT", "SUBMITTED", "APPROVED", "REJECTED", "BUDGET_OK", "SENT_BACK"];
+const FILTERS = ["All", ...STATUS_FILTERS, "Plumbing", "Electrical"];
+const filterLabel = (f) => STATUS_LABELS[f] || f;
 
 // All estimates: search, filter chips with counts, swipe a row for Duplicate / Delete.
 export default function EstimatesScreen({ navigation, route }) {
   const { estimates, deleteEstimate, duplicateEstimate } = useEstimates();
   const { canManageTeam, canEditEstimates } = useCompany();
-  const { getAvailability, checkNewLines, stockPolicy } = useInventory();
+  const { getAvailability } = useInventory();
 
-  // A copy takes all its lines from stock again, so check them first.
   function duplicate(estimate) {
-    const problems = checkNewLines(estimate.items || []);
-    if (problems.length && stockPolicy === "block") {
-      notify("Can't duplicate — not in stock", `${problems.slice(0, 8).join("\n")}${problems.length > 8 ? `\n…and ${problems.length - 8} more` : ""}`);
-      return;
-    }
     duplicateEstimate(estimate.id);
-    if (problems.length) notify("Duplicated — stock is short", problems.slice(0, 8).join("\n"));
   }
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState(route?.params?.filter || "All");
@@ -48,7 +43,7 @@ export default function EstimatesScreen({ navigation, route }) {
     const q = query.trim().toLowerCase();
     return estimates
       .filter((e) => filter === "All" || e.status === filter || e.trades?.includes(filter))
-      .filter((e) => !q || [e.name, e.client, e.site, e.estimateNumber].some((v) => String(v || "").toLowerCase().includes(q)))
+      .filter((e) => !q || [e.name, e.estimateNumber].some((v) => String(v || "").toLowerCase().includes(q)))
       .map((e) => summarize(e, { getAvailability }));
   }, [estimates, query, filter, getAvailability]);
 
@@ -59,19 +54,19 @@ export default function EstimatesScreen({ navigation, route }) {
   const chips = FILTERS.filter((f) => f === "All" || counts[f] > 0 || f === filter);
 
   return (
-    <Screen tabBar title="Estimates" count={estimates.length}>
+    <Screen tabBar title="MTOs" count={estimates.length}>
       <View style={{ gap: 12 }}>
-        <SearchField value={query} onChangeText={setQuery} placeholder="Search name, client or site" />
+        <SearchField value={query} onChangeText={setQuery} placeholder="Search name or MTO number" />
         <ChipRow>
           {chips.map((f) => (
-            <Chip key={f} label={f} count={counts[f]} active={filter === f} onPress={() => setFilter(f)} />
+            <Chip key={f} label={filterLabel(f)} count={counts[f]} active={filter === f} onPress={() => setFilter(f)} />
           ))}
         </ChipRow>
       </View>
 
       <View style={{ marginTop: 16, gap: 10 }}>
         {estimates.length === 0 ? (
-          <EmptyState icon="fileText" title="No estimates yet" body="Walk the site, log what you see, and XMTO prices it for you." action="New estimate" onAction={() => navigation.navigate("NewEstimate")} style={{ marginTop: 40 }} />
+          <EmptyState icon="fileText" title="No MTOs yet" body="Walk the site, log what you see, and XMTO prices it for you." action="New MTO" onAction={() => navigation.navigate("NewEstimate")} style={{ marginTop: 40 }} />
         ) : rows.length === 0 ? (
           <EmptyState icon="search" title="Nothing matches" body="Try another word or clear the filter." action="Show all" onAction={() => { setQuery(""); setFilter("All"); }} />
         ) : (

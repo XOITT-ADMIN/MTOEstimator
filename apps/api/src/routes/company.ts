@@ -24,17 +24,35 @@ const profileSchema = z
   })
   .partial();
 
-const inviteRole = z.enum(["admin", "estimator", "viewer"]);
+// Every role that can be handed out from Settings › Team. "owner" is set once, at company
+// creation, and never assigned here.
+const ASSIGNABLE_ROLES = ["admin", "site_supervisor", "project_manager", "finance", "procurement", "logistics", "viewer"] as const;
+const roleSchema = z.enum(ASSIGNABLE_ROLES);
+const rolesSchema = z.array(roleSchema).min(1, "Pick at least one role.").max(ASSIGNABLE_ROLES.length);
 
-function companyView(c: { id: string; name: string; profile: unknown; stockPolicy: string; createdAt: Date }, ownerUid: string | null) {
-  return { id: c.id, name: c.name, profile: { ...(c.profile as object), name: c.name }, stockPolicy: c.stockPolicy, ownerUid, createdAt: c.createdAt.getTime() };
+const ROLE_LABELS: Record<string, string> = {
+  admin: "an admin",
+  site_supervisor: "a site supervisor",
+  project_manager: "a project manager",
+  finance: "finance",
+  procurement: "procurement",
+  logistics: "logistics",
+  viewer: "a viewer",
+};
+
+function roleNames(roles: string[]) {
+  return roles.map((r) => ROLE_LABELS[r] ?? r).join(", ");
+}
+
+function companyView(c: { id: string; name: string; profile: unknown; createdAt: Date }, ownerUid: string | null) {
+  return { id: c.id, name: c.name, profile: { ...(c.profile as object), name: c.name }, ownerUid, createdAt: c.createdAt.getTime() };
 }
 
 export async function companyRoutes(app: FastifyInstance, { db, hub, mailer }: Deps) {
   const auth = { onRequest: [app.authenticate] };
 
   async function ownerOf(companyId: string) {
-    const o = await db.membership.findFirst({ where: { companyId, role: "owner" }, select: { userId: true } });
+    const o = await db.membership.findFirst({ where: { companyId, roles: { has: "owner" } }, select: { userId: true } });
     return o?.userId ?? null;
   }
 
@@ -49,7 +67,7 @@ export async function companyRoutes(app: FastifyInstance, { db, hub, mailer }: D
       const invite = await db.invite.findFirst({ where: { email: user.email }, orderBy: { createdAt: "asc" } });
       if (invite) {
         m = await db.$transaction(async (tx) => {
-          const created = await tx.membership.create({ data: { companyId: invite.companyId, userId: id, role: invite.role }, include: { company: true } });
+          const created = await tx.membership.create({ data: { companyId: invite.companyId, userId: id, roles: invite.roles }, include: { company: true } });
           await tx.invite.deleteMany({ where: { email: user.email } });
           if (invite.name && !user.name) await tx.user.update({ where: { id }, data: { name: invite.name } });
           return created;
@@ -59,7 +77,7 @@ export async function companyRoutes(app: FastifyInstance, { db, hub, mailer }: D
     }
     return {
       user: { id: user.id, uid: user.id, email: user.email, name: user.name, photo: user.photo, provider: user.provider },
-      membership: m ? { companyId: m.companyId, role: m.role } : null,
+      membership: m ? { companyId: m.companyId, roles: m.roles } : null,
       company: m ? companyView(m.company, await ownerOf(m.companyId)) : null,
     };
   });
@@ -79,10 +97,10 @@ export async function companyRoutes(app: FastifyInstance, { db, hub, mailer }: D
       data: {
         name: body.name,
         profile: { address: "", phone: "", email: "", gstin: "", termsAndConditions: DEFAULT_TERMS, ...body.profile, name: body.name },
-        members: { create: { userId: id, role: "owner" } },
+        members: { create: { userId: id, roles: ["owner"] } },
       },
     });
-    return { company: companyView(company, id), membership: { companyId: company.id, role: "owner" } };
+    return { company: companyView(company, id), membership: { companyId: company.id, roles: ["owner"] } };
   });
 
   app.get("/company", auth, async (req) => {
@@ -93,13 +111,13 @@ export async function companyRoutes(app: FastifyInstance, { db, hub, mailer }: D
 
   app.patch("/company", auth, async (req) => {
     const m = await requireMember(db, req);
-    assert(can.manageTeam(m.role), "Only an owner or admin can change the company profile.");
-    const body = z.object({ profile: profileSchema.optional(), stockPolicy: z.enum(["block", "warn"]).optional() }).parse(req.body);
+    assert(can.manageTeam(m.roles), "Only an owner or admin can change the company profile.");
+    const body = z.object({ profile: profileSchema.optional() }).parse(req.body);
     const c = await db.company.findUniqueOrThrow({ where: { id: m.companyId } });
     const profile = { ...(c.profile as object), ...(body.profile ?? {}) } as Record<string, unknown>;
     const updated = await db.company.update({
       where: { id: m.companyId },
-      data: { profile: profile as object, name: (body.profile?.name as string) || c.name, stockPolicy: body.stockPolicy ?? c.stockPolicy },
+      data: { profile: profile as object, name: (body.profile?.name as string) || c.name },
     });
     hub.publish(m.companyId, "company");
     return companyView(updated, await ownerOf(updated.id));
@@ -109,28 +127,28 @@ export async function companyRoutes(app: FastifyInstance, { db, hub, mailer }: D
   app.get("/members", auth, async (req) => {
     const m = await requireMember(db, req);
     const rows = await db.membership.findMany({ where: { companyId: m.companyId }, include: { user: true }, orderBy: { createdAt: "asc" } });
-    return rows.map((r) => ({ id: r.userId, name: r.user.name, email: r.user.email, photo: r.user.photo, role: r.role, joinedAt: r.createdAt.getTime() }));
+    return rows.map((r) => ({ id: r.userId, name: r.user.name, email: r.user.email, photo: r.user.photo, roles: r.roles, joinedAt: r.createdAt.getTime() }));
   });
 
   app.patch<{ Params: { id: string } }>("/members/:id", auth, async (req) => {
     const m = await requireMember(db, req);
-    assert(can.manageTeam(m.role), "Only an owner or admin can change roles.");
-    const { role } = z.object({ role: inviteRole }).parse(req.body);
+    assert(can.manageTeam(m.roles), "Only an owner or admin can change roles.");
+    const { roles } = z.object({ roles: rolesSchema }).parse(req.body);
     const target = await db.membership.findUnique({ where: { userId: req.params.id } });
     if (!target || target.companyId !== m.companyId) throw notFound("That person isn't in your company.");
-    if (target.role === "owner") throw forbidden("The owner's role can't be changed.");
-    await db.membership.update({ where: { userId: req.params.id }, data: { role } });
+    if (target.roles.includes("owner")) throw forbidden("The owner's roles can't be changed.");
+    await db.membership.update({ where: { userId: req.params.id }, data: { roles } });
     hub.publish(m.companyId, "members");
-    return { id: req.params.id, role };
+    return { id: req.params.id, roles };
   });
 
   app.delete<{ Params: { id: string } }>("/members/:id", auth, async (req) => {
     const m = await requireMember(db, req);
-    assert(can.manageTeam(m.role), "Only an owner or admin can remove people.");
+    assert(can.manageTeam(m.roles), "Only an owner or admin can remove people.");
     const target = await db.membership.findUnique({ where: { userId: req.params.id } });
     if (!target || target.companyId !== m.companyId) throw notFound("That person isn't in your company.");
-    if (target.role === "owner") throw forbidden("The owner can't be removed.");
-    // Their estimates stay with the company (admins still see them).
+    if (target.roles.includes("owner")) throw forbidden("The owner can't be removed.");
+    // Their MTOs stay with the company (admins still see them).
     await db.membership.delete({ where: { userId: req.params.id } });
     hub.publish(m.companyId, "members");
     return { removed: true };
@@ -138,33 +156,34 @@ export async function companyRoutes(app: FastifyInstance, { db, hub, mailer }: D
 
   app.get("/invites", auth, async (req) => {
     const m = await requireMember(db, req);
-    assert(can.manageTeam(m.role));
+    assert(can.manageTeam(m.roles));
     const rows = await db.invite.findMany({ where: { companyId: m.companyId }, orderBy: { createdAt: "desc" } });
-    return rows.map((i) => ({ id: i.id, email: i.email, name: i.name, role: i.role, createdAt: i.createdAt.getTime() }));
+    return rows.map((i) => ({ id: i.id, email: i.email, name: i.name, roles: i.roles, createdAt: i.createdAt.getTime() }));
   });
 
   app.post("/invites", auth, async (req) => {
     const m = await requireMember(db, req);
-    assert(can.manageTeam(m.role), "Only an owner or admin can invite people.");
-    const body = z.object({ email: z.string().trim().toLowerCase().email("Enter a valid email address."), name: z.string().trim().max(120).optional().default(""), role: inviteRole.default("estimator") }).parse(req.body);
+    assert(can.manageTeam(m.roles), "Only an owner or admin can invite people.");
+    const body = z
+      .object({ email: z.string().trim().toLowerCase().email("Enter a valid email address."), name: z.string().trim().max(120).optional().default(""), roles: rolesSchema.optional().default(["site_supervisor"]) })
+      .parse(req.body);
     const existingUser = await db.user.findUnique({ where: { email: body.email }, include: { membership: true } });
     if (existingUser?.membership) {
       throw conflict(existingUser.membership.companyId === m.companyId ? "They're already in your team." : "That email already belongs to another company.");
     }
     const inv = await db.invite.upsert({
       where: { companyId_email: { companyId: m.companyId, email: body.email } },
-      create: { companyId: m.companyId, email: body.email, name: body.name, role: body.role, invitedById: m.userId },
-      update: { name: body.name, role: body.role },
+      create: { companyId: m.companyId, email: body.email, name: body.name, roles: body.roles, invitedById: m.userId },
+      update: { name: body.name, roles: body.roles },
     });
     const company = await db.company.findUniqueOrThrow({ where: { id: m.companyId }, select: { name: true } });
     let emailed = false;
     if (mailer.enabled) {
       try {
-        const roleName = { admin: "an admin", estimator: "a field engineer", viewer: "a viewer" }[body.role] ?? body.role;
         await mailer.send(
           body.email,
           `${m.name} added you to ${company.name} on XMTO`,
-          `Hi ${body.name || "there"},\n\n${m.name} has added you to ${company.name} on XMTO as ${roleName}.\n\n1. Install XMTO – MEP Material Take-off.\n2. Sign in with this email address (${body.email}).\n3. Enter the code we email you — you'll join ${company.name} automatically.\n\n— XMTO · A XOITT Transformation product · https://xoitt.com`
+          `Hi ${body.name || "there"},\n\n${m.name} has added you to ${company.name} on XMTO as ${roleNames(body.roles)}.\n\n1. Install XMTO – MEP Material Take-off.\n2. Sign in with this email address (${body.email}).\n3. Enter the code we email you — you'll join ${company.name} automatically.\n\n— XMTO · A XOITT Transformation product · https://xoitt.com`
         );
         emailed = true;
       } catch (e) {
@@ -172,12 +191,12 @@ export async function companyRoutes(app: FastifyInstance, { db, hub, mailer }: D
       }
     }
     hub.publish(m.companyId, "members");
-    return { id: inv.id, email: inv.email, name: inv.name, role: inv.role, createdAt: inv.createdAt.getTime(), emailed };
+    return { id: inv.id, email: inv.email, name: inv.name, roles: inv.roles, createdAt: inv.createdAt.getTime(), emailed };
   });
 
   app.delete<{ Params: { email: string } }>("/invites/:email", auth, async (req) => {
     const m = await requireMember(db, req);
-    assert(can.manageTeam(m.role));
+    assert(can.manageTeam(m.roles));
     const addr = normaliseEmail(decodeURIComponent(req.params.email));
     if (!addr) throw badRequest("Email missing.");
     await db.invite.deleteMany({ where: { companyId: m.companyId, email: addr } });

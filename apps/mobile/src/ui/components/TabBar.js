@@ -7,9 +7,11 @@ import { T } from "./Text";
 import { Icon } from "./Icon";
 import { Fab } from "./Button";
 
-// Bottom tab bar: Home · Estimates · (+ FAB) · Library · Settings.
+// Bottom tab bar: Inbox · MTOs · (+ FAB) · Library · Settings.
 // Active tab: Blue 700 label on a Blue-500-tint pill. Works as a React Navigation tabBar.
+// Route names stay as they were (Home, Estimates, …) — only the label shown here changed.
 export const TAB_ICONS = { Home: "home", Estimates: "fileText", Library: "layers", Settings: "settings" };
+export const TAB_LABELS = { Home: "Inbox", Estimates: "MTOs" };
 
 export function TabBar({ state, navigation, onFab }) {
   const insets = useSafeAreaInsets();
@@ -33,7 +35,7 @@ export function TabBar({ state, navigation, onFab }) {
           <Icon name={TAB_ICONS[route.name] || "home"} size={22} color={focused ? "blue700" : "muted"} />
         </View>
         <T variant="caption" weight={focused ? 600 : 500} color={focused ? "blue700" : "muted"}>
-          {route.name}
+          {TAB_LABELS[route.name] || route.name}
         </T>
       </Pressable>
     );

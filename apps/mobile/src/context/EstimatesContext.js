@@ -2,6 +2,8 @@ import React, { createContext, useContext, useMemo, useCallback } from "react";
 
 import { useLocalCollection } from "../storage/useLocalCollection";
 import { useCompanyRemote } from "./CompanyContext";
+import { api } from "../api/client";
+import { findTransition } from "../features/mto/mtoStatus";
 
 const STORAGE_KEY = "mto-estimator/estimates.v1";
 
@@ -29,13 +31,14 @@ function seedEstimates() {
   return [
     {
       id: "est-1",
-      estimateNumber: "EST-0001",
+      estimateNumber: "MTO-0001",
       name: "Block A — Site Office Complex",
+      projectId: "local",
       client: "Aegis Builders",
       site: "Whitefield, Bengaluru",
       date: "09 Sep 2026",
       trades: ["Plumbing", "Electrical"],
-      status: "Draft",
+      status: "DRAFT",
       notes:
         "Ground + 2 floor site office. Cold water + power reticulation only — exclude HVAC this phase.",
       adjustments: [{ id: "adj-1", label: "Transportation", mode: "fixed", value: 2500 }],
@@ -107,13 +110,14 @@ function seedEstimates() {
     },
     {
       id: "est-2",
-      estimateNumber: "EST-0002",
+      estimateNumber: "MTO-0002",
       name: "Tower 3 — Riser Retrofit",
+      projectId: "local",
       client: "Aegis Builders",
       site: "Whitefield, Bengaluru",
       date: "05 Sep 2026",
       trades: ["Plumbing"],
-      status: "Ready",
+      status: "SUBMITTED",
       notes: "",
       adjustments: defaultAdjustments(),
       discount: defaultDiscount(),
@@ -123,13 +127,14 @@ function seedEstimates() {
     },
     {
       id: "est-3",
-      estimateNumber: "EST-0003",
+      estimateNumber: "MTO-0003",
       name: "DG Yard — Cabling Revamp",
+      projectId: "local",
       client: "Sundar Infra",
       site: "Peenya, Bengaluru",
       date: "03 Sep 2026",
       trades: ["Electrical"],
-      status: "Ready",
+      status: "APPROVED",
       notes: "",
       adjustments: defaultAdjustments(),
       discount: defaultDiscount(),
@@ -142,7 +147,7 @@ function seedEstimates() {
 
 export function EstimatesProvider({ children }) {
   const remote = useCompanyRemote("estimates");
-  const { items: estimates, loaded, apply: setEstimates, syncError, clearSyncError, pending, online } = useLocalCollection({
+  const { items: estimates, loaded, apply: setEstimates, syncError, clearSyncError, pending, online, reload } = useLocalCollection({
     localKey: STORAGE_KEY,
     seed: seedEstimates,
     remote,
@@ -150,19 +155,19 @@ export function EstimatesProvider({ children }) {
 
   const addEstimate = useCallback(
     (data) => {
-      // Unique across devices: several engineers create estimates in the same company.
+      if (!data?.projectId) throw new Error("Pick a project for this MTO.");
+      // Unique across devices: several engineers create MTOs in the same company.
       const id = "est-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
       const nextNumber = estimates.length + 1;
       const newEstimate = {
         id,
         // With a server this is a placeholder — the API assigns the real, company-wide number.
-        estimateNumber: remote ? "EST-····" : `EST-${String(nextNumber).padStart(4, "0")}`,
-        name: data.name || "Untitled estimate",
-        client: data.client || "",
-        site: data.site || "",
+        estimateNumber: remote ? "MTO-····" : `MTO-${String(nextNumber).padStart(4, "0")}`,
+        name: data.name || "Untitled MTO",
+        projectId: data.projectId,
         date: data.date || "",
         trades: data.trades || [],
-        status: "Draft",
+        status: "DRAFT",
         notes: data.notes || "",
         adjustments: defaultAdjustments(),
         discount: defaultDiscount(),
@@ -250,8 +255,8 @@ export function EstimatesProvider({ children }) {
         ...src,
         id: newId,
         name: `${src.name} (copy)`,
-        status: "Draft",
-        estimateNumber: remote ? "EST-····" : `EST-${String(estimates.length + 1).padStart(4, "0")}`,
+        status: "DRAFT",
+        estimateNumber: remote ? "MTO-····" : `MTO-${String(estimates.length + 1).padStart(4, "0")}`,
         createdBy: undefined,
         updatedAt: Date.now(),
         items: (src.items || []).map((it, i) => ({ ...it, id: `item-${Date.now()}-${i}-${Math.round(Math.random() * 1e4)}` })),
@@ -267,6 +272,45 @@ export function EstimatesProvider({ children }) {
     [estimates]
   );
 
+  // Move an MTO to another status (Submit, Approve, Reject, …). With a server this is the
+  // authority — POST /mtos/:id/transition re-checks role, ownership and comment requirements —
+  // and we reload the canonical copy afterward rather than guessing at what changed. Without a
+  // server (solo device) there's no approval loop to enforce, so we apply the same rule table
+  // ourselves; see src/features/mto/mtoStatus.js.
+  const transitionMto = useCallback(
+    async (id, to, comment = "") => {
+      if (!remote) {
+        const est = estimates.find((e) => e.id === id);
+        if (!est) throw new Error("MTO not found.");
+        const rule = findTransition(est.status, to);
+        if (!rule) throw new Error(`This MTO is "${est.status}" now — refresh and try again.`);
+        if (rule.commentRequired && !comment.trim()) throw new Error("Add a comment first.");
+        if (to === "SUBMITTED" && !(est.items || []).length) throw new Error("Add at least one item before submitting.");
+        setEstimates((prev) => prev.map((e) => (e.id === id ? { ...e, status: to, updatedAt: Date.now() } : e)));
+        return;
+      }
+      const r = await api("POST", `/mtos/${encodeURIComponent(id)}/transition`, { to, comment });
+      await reload();
+      return r.item;
+    },
+    [remote, estimates, reload]
+  );
+
+  // "Waiting for you" (by role) + "My MTOs" (mine, whatever their status) — the Inbox screen.
+  const fetchInbox = useCallback(async () => {
+    if (!remote) return { waiting: [], mine: estimates };
+    return api("GET", "/mtos/inbox");
+  }, [remote, estimates]);
+
+  // The audit trail for one MTO (History tab). No server → no shared trail to show.
+  const fetchHistory = useCallback(
+    async (id) => {
+      if (!remote) return [];
+      return api("GET", `/mtos/${encodeURIComponent(id)}/history`);
+    },
+    [remote]
+  );
+
   const value = useMemo(
     () => ({
       estimates,
@@ -275,6 +319,7 @@ export function EstimatesProvider({ children }) {
       clearSyncError,
       pending,
       online,
+      reload,
       addEstimate,
       updateEstimate,
       deleteEstimate,
@@ -284,8 +329,11 @@ export function EstimatesProvider({ children }) {
       duplicateItem,
       removeItem,
       getEstimate,
+      transitionMto,
+      fetchInbox,
+      fetchHistory,
     }),
-    [estimates, loaded, syncError, clearSyncError, pending, online, addEstimate, updateEstimate, deleteEstimate, duplicateEstimate, addItem, updateItem, duplicateItem, removeItem, getEstimate]
+    [estimates, loaded, syncError, clearSyncError, pending, online, reload, addEstimate, updateEstimate, deleteEstimate, duplicateEstimate, addItem, updateItem, duplicateItem, removeItem, getEstimate, transitionMto, fetchInbox, fetchHistory]
   );
 
   return <EstimatesContext.Provider value={value}>{children}</EstimatesContext.Provider>;

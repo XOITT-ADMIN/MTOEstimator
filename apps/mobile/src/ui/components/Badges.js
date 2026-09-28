@@ -1,19 +1,19 @@
 import React from "react";
 import { View } from "react-native";
 
-import { colors, radius, statusStyles, tradeStyles } from "../theme";
+import { colors, radius, statusStyles, statusLabel, tradeStyles } from "../theme";
 import { T } from "./Text";
 import { Icon } from "./Icon";
 
-// Estimate status: dot + word on a tint.  <StatusBadge status="Draft" />
+// MTO status: dot + word on a tint.  <StatusBadge status="DRAFT" />
 export function StatusBadge({ status, size = "m" }) {
-  const s = statusStyles[status] || statusStyles.Completed;
+  const s = statusStyles[status] || statusStyles.CLOSED;
   const h = size === "l" ? 28 : 24;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 6, height: h, paddingHorizontal: 10, borderRadius: radius.pill, backgroundColor: s.bg, alignSelf: "flex-start" }}>
       <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: s.dot }} />
       <T variant="caption" weight={600} color={s.fg}>
-        {status}
+        {statusLabel(status)}
       </T>
     </View>
   );
@@ -74,12 +74,14 @@ export function CountPill({ children, tone = "warning" }) {
   );
 }
 
-// Role pill (Owner = navy solid, others soft).
-export function RolePill({ role, label }) {
-  const owner = role === "owner";
+// Role pill (Owner = navy solid, others soft). `roles` may be an array (a person can hold more
+// than one) or a single role string; `label` is the text already formatted for display.
+export function RolePill({ role, roles, label }) {
+  const list = roles || (role ? [role] : []);
+  const owner = list.includes("owner");
   return (
     <View style={{ height: 26, paddingHorizontal: 10, borderRadius: 13, backgroundColor: owner ? colors.navy : "#E9ECF2", justifyContent: "center" }}>
-      <T variant="caption" weight={600} color={owner ? colors.white : colors.muted}>
+      <T variant="caption" weight={600} color={owner ? colors.white : colors.muted} numberOfLines={1}>
         {label}
       </T>
     </View>

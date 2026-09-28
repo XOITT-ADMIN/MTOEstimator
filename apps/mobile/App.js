@@ -13,6 +13,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AuthProvider } from "./src/context/AuthContext";
 import { EstimatesProvider } from "./src/context/EstimatesContext";
 import { CompanyProvider } from "./src/context/CompanyContext";
+import { ProjectsProvider } from "./src/context/ProjectsContext";
 import { RatesProvider } from "./src/pricing/RatesContext";
 import { CatalogProvider } from "./src/library/CatalogContext";
 import { InventoryProvider } from "./src/inventory/InventoryContext";
@@ -34,18 +35,20 @@ export default function App() {
       <AuthProvider>
         <AppLockProvider>
           <CompanyProvider>
-            <CatalogProvider>
-              <RatesProvider>
-                <EstimatesProvider>
-                  <InventoryProvider>
-                    <StatusBar style="dark" />
-                    <RootNavigator />
-                    <SyncBanner />
-                    <LockScreen />
-                  </InventoryProvider>
-                </EstimatesProvider>
-              </RatesProvider>
-            </CatalogProvider>
+            <ProjectsProvider>
+              <CatalogProvider>
+                <RatesProvider>
+                  <EstimatesProvider>
+                    <InventoryProvider>
+                      <StatusBar style="dark" />
+                      <RootNavigator />
+                      <SyncBanner />
+                      <LockScreen />
+                    </InventoryProvider>
+                  </EstimatesProvider>
+                </RatesProvider>
+              </CatalogProvider>
+            </ProjectsProvider>
           </CompanyProvider>
         </AppLockProvider>
       </AuthProvider>

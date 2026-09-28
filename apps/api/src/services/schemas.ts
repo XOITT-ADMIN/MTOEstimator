@@ -20,7 +20,10 @@ export const estimateSchema = z
   .object({
     id: z.string().min(1).max(100),
     name: z.string().max(200).optional().default("Untitled estimate"),
-    status: z.string().max(40).optional().default("Draft"),
+    // Accepted for backward compatibility with older app builds, but ignored on save — an
+    // MTO's status can only change through POST /mtos/:id/transition.
+    status: z.string().max(40).optional(),
+    projectId: z.string().min(1).max(100),
     updatedAt: z.coerce.number().int().nonnegative(),
     items: z.array(estimateLineSchema).max(5000).optional().default([]),
   })

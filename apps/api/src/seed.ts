@@ -10,6 +10,8 @@ const db = createDb(env.DATABASE_URL);
 
 const ownerEmail = (process.env.SEED_OWNER_EMAIL || "owner@example.com").toLowerCase();
 const engineerEmail = (process.env.SEED_ENGINEER_EMAIL || "engineer@example.com").toLowerCase();
+const pmEmail = (process.env.SEED_PM_EMAIL || "pm@example.com").toLowerCase();
+const financeEmail = (process.env.SEED_FINANCE_EMAIL || "finance@example.com").toLowerCase();
 
 const stock = [
   { trade: "Plumbing", family: "Pipe", item: "Pipe", material: "PVC", size: "40 mm", stock: 500 },
@@ -32,10 +34,17 @@ async function main() {
     data: {
       name: "Demo MEP Contractors",
       profile: { address: "Whitefield, Bengaluru, Karnataka", phone: "", email: "", gstin: "", termsAndConditions: "1. Rates valid for 30 days.\n2. GST extra as applicable." },
-      members: { create: { userId: owner.id, role: "owner" } },
-      invites: { create: { email: engineerEmail, name: "Ravi (Field Engineer)", role: "estimator", invitedById: owner.id } },
+      members: { create: { userId: owner.id, roles: ["owner"] } },
+      invites: {
+        create: [
+          { email: engineerEmail, name: "Ravi (Site Supervisor)", roles: ["site_supervisor"], invitedById: owner.id },
+          { email: pmEmail, name: "Priya (Project Manager)", roles: ["project_manager"], invitedById: owner.id },
+          { email: financeEmail, name: "Farhan (Finance)", roles: ["finance"], invitedById: owner.id },
+        ],
+      },
     },
   });
+  await db.project.create({ data: { companyId: company.id, name: "Whitefield Tower", siteName: "Whitefield, Bengaluru", createdById: owner.id } });
   for (const s of stock) {
     const key = stockKey({ ...s, secondarySize: s.secondarySize ?? null, core: s.core ?? null });
     await db.stockLine.create({

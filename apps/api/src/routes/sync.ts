@@ -30,28 +30,27 @@ export async function syncRoutes(app: FastifyInstance, { db, hub, mailer }: Deps
 
   const handlers: Record<string, {
     list: (m: Member) => Promise<unknown[]>;
-    upsert: (m: Member, doc: Record<string, unknown>, policy: string) => Promise<Result>;
+    upsert: (m: Member, doc: Record<string, unknown>) => Promise<Result>;
     remove: (m: Member, id: string) => Promise<void>;
     alsoChanges?: Resource[];
   }> = {
     estimates: {
       list: (m) => listEstimates(db, m),
-      upsert: async (m, doc, policy) => {
-        const r = await saveEstimate(db, m, doc, policy);
+      upsert: async (m, doc) => {
+        const r = await saveEstimate(db, m, doc);
         return { id: String(doc.id), ok: true, item: r.item, stale: r.status === "stale" };
       },
       remove: (m, id) => deleteEstimate(db, m, id),
-      alsoChanges: ["stock"], // used/available move with every estimate change
     },
     stock: {
       list: (m) => listStock(db, m.companyId),
       upsert: async (m, doc) => {
-        assert(can.manageLibrary(m.role), "Only an owner or admin can change stock.");
+        assert(can.manageLibrary(m.roles), "Only an owner or admin can change stock.");
         const key = await upsertStock(db, m.companyId, doc);
         return { id: key, ok: true };
       },
       remove: async (m, id) => {
-        assert(can.manageLibrary(m.role), "Only an owner or admin can change stock.");
+        assert(can.manageLibrary(m.roles), "Only an owner or admin can change stock.");
         await db.stockLine.deleteMany({ where: { companyId: m.companyId, key: id } });
       },
     },
@@ -59,14 +58,14 @@ export async function syncRoutes(app: FastifyInstance, { db, hub, mailer }: Deps
       list: async (m) =>
         (await db.rateOverride.findMany({ where: { companyId: m.companyId } })).map((r) => ({ id: r.key, materialRate: toNum(r.materialRate), labourRate: toNum(r.labourRate) })),
       upsert: async (m, doc) => {
-        assert(can.manageLibrary(m.role), "Only an owner or admin can change rates.");
+        assert(can.manageLibrary(m.roles), "Only an owner or admin can change rates.");
         const r = rateSchema.parse(doc);
         const data = { materialRate: r.materialRate, labourRate: r.labourRate };
         await db.rateOverride.upsert({ where: { companyId_key: { companyId: m.companyId, key: r.id } }, create: { companyId: m.companyId, key: r.id, ...data }, update: data });
         return { id: r.id, ok: true };
       },
       remove: async (m, id) => {
-        assert(can.manageLibrary(m.role), "Only an owner or admin can change rates.");
+        assert(can.manageLibrary(m.roles), "Only an owner or admin can change rates.");
         await db.rateOverride.deleteMany({ where: { companyId: m.companyId, key: id } });
       },
     },
@@ -88,14 +87,13 @@ export async function syncRoutes(app: FastifyInstance, { db, hub, mailer }: Deps
     const h = handler(req.params.resource);
     const m = await requireMember(db, req);
     const body = batchSchema.parse(req.body);
-    const company = await db.company.findUniqueOrThrow({ where: { id: m.companyId }, select: { stockPolicy: true } });
     const results: Result[] = [];
     let changed = false;
 
     for (const doc of body.upserts) {
       const id = String(doc.id ?? doc.key ?? "");
       try {
-        const r = await h.upsert(m, doc, company.stockPolicy);
+        const r = await h.upsert(m, doc);
         if (!(r.ok && r.stale)) changed = true;
         results.push(r);
       } catch (e) {

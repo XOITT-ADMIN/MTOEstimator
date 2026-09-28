@@ -43,7 +43,7 @@ export async function libraryRoutes(app: FastifyInstance, { db, hub }: Deps) {
 
   app.post("/library/catalog", auth, async (req) => {
     const m = await requireMember(db, req);
-    assert(can.manageLibrary(m.role), "Only an owner or admin can publish the library.");
+    assert(can.manageLibrary(m.roles), "Only an owner or admin can publish the library.");
     const body = z
       .object({ data: catalogSchema, note: z.string().max(500).optional().default(""), baseVersion: z.number().int().min(0).optional() })
       .parse(req.body);

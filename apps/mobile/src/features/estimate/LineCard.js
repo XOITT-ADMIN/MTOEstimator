@@ -29,6 +29,7 @@ export function LineCard({ it, availability, onPress, onDuplicate, onRemove }) {
       <SwipeRow actions={actions}>
         <Pressable
           onPress={onPress}
+          disabled={!onPress}
           accessibilityRole="button"
           accessibilityLabel={`${it.item} ${it.material}, ${money(calculateItemTotal(it))}`}
           style={({ pressed }) => ({ padding: 14, gap: 8, minHeight: 64, backgroundColor: pressed ? colors.tintBlueSoft : colors.surface })}

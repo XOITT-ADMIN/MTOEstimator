@@ -4,30 +4,28 @@ import { View, ScrollView, Pressable } from "react-native";
 import { TopBar, Blueprint, InitialsTile, Section, Group, Card, Avatar, RolePill, OptionCard, Field, Button, TextButton, EmptyState, T, Icon, colors, radius } from "../ui";
 import { plural, shortDate } from "../features/estimates";
 import { useAuth, normaliseEmail, isValidEmail } from "../context/AuthContext";
-import { useCompany } from "../context/CompanyContext";
+import { useCompany, ASSIGNABLE_ROLES, roleLabel, rolesLabel } from "../context/CompanyContext";
 import { confirmAction, notify } from "../utils/confirm";
 
-const ROLE_LABEL = { owner: "Owner", admin: "Admin", estimator: "Field engineer", viewer: "Viewer" };
-const ROLE_OPTIONS = [
-  { key: "estimator", label: "Field engineer", sub: "Makes their own estimates" },
-  { key: "admin", label: "Admin", sub: "Library, team and approvals" },
-  { key: "viewer", label: "Viewer", sub: "Can look, can’t change" },
-];
+// A person can hold more than one role at once (e.g. Project Manager + Procurement).
+function toggled(list, key) {
+  return list.includes(key) ? list.filter((r) => r !== key) : [...list, key];
+}
 
 // Team: who's in the company, their roles, adding people by email, pending invites.
 export default function TeamScreen({ navigation }) {
   const { user } = useAuth();
-  const { company, members, invites, isOwner, canManageTeam, role: myRole, invite, revokeInvite, setMemberRole, removeMember, status } = useCompany();
+  const { company, members, invites, isOwner, canManageTeam, roles: myRoles, invite, revokeInvite, setMemberRoles, removeMember, status } = useCompany();
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [role, setRole] = useState("estimator");
+  const [inviteRoles, setInviteRoles] = useState(["site_supervisor"]);
   const [busy, setBusy] = useState(false);
-  const [openId, setOpenId] = useState(null); // member expanded to change role / remove
+  const [openId, setOpenId] = useState(null); // member expanded to change roles / remove
 
   async function add() {
     setBusy(true);
     try {
-      const r = await invite({ email, name, role });
+      const r = await invite({ email, name, roles: inviteRoles });
       setEmail("");
       setName("");
       notify("Added to the team", `${email} can now sign in with this email and will join ${company?.name} automatically.` + (r?.emailed ? " We've emailed them too." : " Let them know — no email was sent."));
@@ -48,10 +46,11 @@ export default function TeamScreen({ navigation }) {
     }
   }
 
-  async function changeRole(m, next) {
-    if (next === m.role) return;
+  async function toggleRole(m, key) {
+    const next = toggled(m.roles || [], key);
+    if (!next.length) return; // must keep at least one role
     try {
-      await setMemberRole(m.id, next);
+      await setMemberRoles(m.id, next);
     } catch (e) {
       notify("Could not change role", e?.message);
     }
@@ -68,7 +67,7 @@ export default function TeamScreen({ navigation }) {
     );
   }
 
-  const you = isOwner ? "you are the owner" : `you are ${myRole === "admin" ? "an admin" : `a ${(ROLE_LABEL[myRole] || "member").toLowerCase()}`}`;
+  const you = isOwner ? "you are the owner" : `you are ${(myRoles.length ? rolesLabel(myRoles) : "a member").toLowerCase()}`;
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
@@ -90,7 +89,8 @@ export default function TeamScreen({ navigation }) {
           <Group>
             {members.map((m) => {
               const isYou = m.id === user?.uid;
-              const editable = canManageTeam && m.role !== "owner" && !isYou;
+              const mRoles = m.roles || [];
+              const editable = canManageTeam && !mRoles.includes("owner") && !isYou;
               const open = editable && openId === m.id;
               return (
                 <View key={m.id}>
@@ -105,12 +105,15 @@ export default function TeamScreen({ navigation }) {
                         {m.email || "—"}
                       </T>
                     </View>
-                    <RolePill role={m.role} label={ROLE_LABEL[m.role] || m.role} />
+                    <RolePill roles={mRoles} label={rolesLabel(mRoles)} />
                   </Pressable>
                   {open ? (
                     <View style={{ paddingHorizontal: 16, paddingBottom: 12, gap: 8, backgroundColor: colors.tintBlueSoft }}>
-                      {ROLE_OPTIONS.map((r) => (
-                        <OptionCard key={r.key} compact title={r.label} body={r.sub} selected={m.role === r.key} onPress={() => changeRole(m, r.key)} />
+                      <T variant="caption" weight={400}>
+                        Tap to give or remove a role. They can hold more than one.
+                      </T>
+                      {ASSIGNABLE_ROLES.map((key) => (
+                        <OptionCard key={key} compact title={roleLabel(key)} selected={mRoles.includes(key)} onPress={() => toggleRole(m, key)} />
                       ))}
                       <TextButton title="Remove from team" icon="trash" color="danger" onPress={() => remove(m)} style={{ height: 48, alignSelf: "flex-start" }} />
                     </View>
@@ -132,10 +135,10 @@ export default function TeamScreen({ navigation }) {
               <Field label="Name" value={name} onChangeText={setName} placeholder="e.g. Meera" autoCapitalize="words" />
               <Field label="Email they sign in with" value={email} onChangeText={(v) => setEmail(normaliseEmail(v))} placeholder="name@company.in" keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
               <View style={{ gap: 6 }}>
-                <T variant="label">Role</T>
-                <View style={{ flexDirection: "row", gap: 8 }}>
-                  {ROLE_OPTIONS.map((r) => (
-                    <RoleChoice key={r.key} label={r.label} active={role === r.key} onPress={() => setRole(r.key)} />
+                <T variant="label">Roles</T>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                  {ASSIGNABLE_ROLES.map((key) => (
+                    <RoleChoice key={key} label={roleLabel(key)} active={inviteRoles.includes(key)} onPress={() => setInviteRoles((prev) => toggled(prev, key))} />
                   ))}
                 </View>
               </View>
@@ -146,7 +149,7 @@ export default function TeamScreen({ navigation }) {
                 </T>
               </View>
             </Card>
-            <Button title="Add to team" icon="userPlus" onPress={add} loading={busy} disabled={busy || !isValidEmail(email)} />
+            <Button title="Add to team" icon="userPlus" onPress={add} loading={busy} disabled={busy || !isValidEmail(email) || !inviteRoles.length} />
           </Section>
         ) : null}
 
@@ -157,7 +160,7 @@ export default function TeamScreen({ navigation }) {
                 <View key={inv.id || inv.email} style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: 64, paddingLeft: 16, paddingRight: 4 }}>
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <T variant="body" weight={600} numberOfLines={1}>
-                      {inv.name || "Unnamed"} · <T variant="body" weight={400} color="muted">{ROLE_LABEL[inv.role] || inv.role}</T>
+                      {inv.name || "Unnamed"} · <T variant="body" weight={400} color="muted">{rolesLabel(inv.roles)}</T>
                     </T>
                     <T variant="label" weight={400} numberOfLines={1}>
                       {inv.email}

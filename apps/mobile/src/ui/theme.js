@@ -72,16 +72,39 @@ export const colors = {
   backdrop: "rgba(21,24,51,0.55)",
 };
 
-// Estimate status → badge colours. Every badge has a dot and a word, never colour alone.
+// MTO status → badge colours. Every badge has a dot and a word, never colour alone.
+// Phase 1 only reaches DRAFT…SENT_BACK; the rest exist so later phases (procurement, logistics,
+// site use) don't need to touch this file again.
 export const statusStyles = {
-  Draft: { bg: colors.warningTint, fg: colors.warningInk, dot: palette.warning },
-  Ready: { bg: "#E1ECF8", fg: "#1F4E86", dot: palette.action },
-  Sent: { bg: "#E4E6F1", fg: palette.navy, dot: palette.navy },
-  Approved: { bg: colors.successTint, fg: colors.successInk, dot: palette.success },
-  Rejected: { bg: colors.dangerTint, fg: colors.dangerInk, dot: palette.danger },
-  Completed: { bg: "#E9ECF2", fg: "#3A4160", dot: palette.faint },
+  DRAFT: { bg: colors.warningTint, fg: colors.warningInk, dot: palette.warning },
+  SUBMITTED: { bg: "#E1ECF8", fg: "#1F4E86", dot: palette.action },
+  APPROVED: { bg: colors.successTint, fg: colors.successInk, dot: palette.success },
+  REJECTED: { bg: colors.dangerTint, fg: colors.dangerInk, dot: palette.danger },
+  BUDGET_OK: { bg: colors.successTint, fg: colors.successInk, dot: palette.success },
+  SENT_BACK: { bg: colors.warningTint, fg: colors.warningInk, dot: palette.warning },
+  READY_TO_DISPATCH: { bg: "#E1ECF8", fg: "#1F4E86", dot: palette.action },
+  DISPATCHED: { bg: "#E4E6F1", fg: palette.navy, dot: palette.navy },
+  DELIVERED: { bg: colors.successTint, fg: colors.successInk, dot: palette.success },
+  IN_USE: { bg: "#E4E6F1", fg: palette.navy, dot: palette.navy },
+  CLOSED: { bg: "#E9ECF2", fg: "#3A4160", dot: palette.faint },
+  CANCELLED: { bg: colors.dangerTint, fg: colors.dangerInk, dot: palette.danger },
 };
 export const STATUSES = Object.keys(statusStyles);
+export const STATUS_LABELS = {
+  DRAFT: "Draft",
+  SUBMITTED: "Submitted",
+  APPROVED: "Approved",
+  REJECTED: "Rejected",
+  BUDGET_OK: "Budget OK",
+  SENT_BACK: "Sent back",
+  READY_TO_DISPATCH: "Ready to dispatch",
+  DISPATCHED: "Dispatched",
+  DELIVERED: "Delivered",
+  IN_USE: "In use",
+  CLOSED: "Closed",
+  CANCELLED: "Cancelled",
+};
+export const statusLabel = (s) => STATUS_LABELS[s] || s;
 
 // Trade → pill colours + icon.
 export const tradeStyles = {

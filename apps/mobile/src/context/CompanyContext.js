@@ -21,11 +21,29 @@ const DEFAULT_PROFILE = {
     "4. GST as applicable is extra unless shown as included above.",
 };
 
-// owner  — created the company, full control
-// admin  — manages the library (rates, stock), the team, and approves estimates
-// estimator — field engineer: makes their own estimates
-// viewer — read-only
-export const ROLES = ["owner", "admin", "estimator", "viewer"];
+// owner            — created the company, full control
+// admin            — manages the library (rates, stock), the team; everything a PM can do
+// site_supervisor  — field engineer: creates/submits MTOs, records site use and wastage
+// project_manager  — creates/renames/closes projects; approves or rejects MTOs
+// finance          — marks an approved MTO Budget OK, or sends it back
+// procurement      — issues stock / buys for an MTO, receives purchases, dispatch-ready
+// logistics        — loading, dispatch and delivery
+// viewer           — read-only
+// A person can hold more than one of these at once (e.g. Project Manager + Procurement).
+export const ROLES = ["owner", "admin", "site_supervisor", "project_manager", "finance", "procurement", "logistics", "viewer"];
+export const ASSIGNABLE_ROLES = ROLES.filter((r) => r !== "owner");
+export const ROLE_LABELS = {
+  owner: "Owner",
+  admin: "Admin",
+  site_supervisor: "Site Supervisor",
+  project_manager: "Project Manager",
+  finance: "Finance",
+  procurement: "Procurement",
+  logistics: "Logistics",
+  viewer: "Viewer",
+};
+export const roleLabel = (r) => ROLE_LABELS[r] || r;
+export const rolesLabel = (roles) => (roles || []).map(roleLabel).join(" · ") || "No roles";
 
 const CompanyContext = createContext(null);
 
@@ -40,7 +58,7 @@ export function CompanyProvider({ children }) {
   const [localLoaded, setLocalLoaded] = useState(false);
 
   const [company, setCompany] = useState(null);
-  const [role, setRole] = useState(null);
+  const [roles, setRoles] = useState([]);
   const [members, setMembers] = useState([]);
   const [invites, setInvites] = useState([]);
   const [status, setStatus] = useState(apiEnabled ? "loading" : "local");
@@ -71,22 +89,22 @@ export function CompanyProvider({ children }) {
   const applyMe = useCallback((me) => {
     if (me?.membership && me.company) {
       setCompany(me.company);
-      setRole(me.membership.role);
+      setRoles(me.membership.roles || []);
       setStatus("member");
     } else {
       setCompany(null);
-      setRole(null);
+      setRoles([]);
       setMembers([]);
       setInvites([]);
       setStatus("none");
     }
   }, []);
 
-  const loadTeam = useCallback(async (asRole) => {
+  const loadTeam = useCallback(async (asRoles) => {
     try {
       const m = await api("GET", "/members");
       setMembers(m);
-      if (asRole === "owner" || asRole === "admin") setInvites(await api("GET", "/invites"));
+      if ((asRoles || []).some((r) => r === "owner" || r === "admin")) setInvites(await api("GET", "/invites"));
       else setInvites([]);
     } catch (e) {
       // offline — keep what we have
@@ -100,7 +118,7 @@ export function CompanyProvider({ children }) {
       const me = await api("GET", "/me");
       applyMe(me);
       AsyncStorage.setItem(ME_CACHE_KEY, JSON.stringify({ uid: user.uid, me })).catch(() => {});
-      if (me.membership) loadTeam(me.membership.role);
+      if (me.membership) loadTeam(me.membership.roles);
     } catch (e) {
       if (e?.offline) {
         // Offline start: use the last known workspace so field work can carry on.
@@ -124,7 +142,7 @@ export function CompanyProvider({ children }) {
     if (!user) {
       setStatus("loading");
       setCompany(null);
-      setRole(null);
+      setRoles([]);
       setMembers([]);
       setInvites([]);
       return;
@@ -142,7 +160,7 @@ export function CompanyProvider({ children }) {
     });
   }, [status, refresh]);
 
-  const isManager = role === "owner" || role === "admin";
+  const isManager = roles.includes("owner") || roles.includes("admin");
 
   const profile = useMemo(() => {
     if (apiEnabled) return { ...DEFAULT_PROFILE, ...(company?.profile || {}), name: company?.name || company?.profile?.name || "" };
@@ -185,46 +203,46 @@ export function CompanyProvider({ children }) {
   );
 
   const invite = useCallback(
-    async ({ email, name, role: inviteRole }) => {
+    async ({ email, name, roles: inviteRoles }) => {
       const addr = normaliseEmail(email);
       if (!isValidEmail(addr)) throw new Error("Enter a valid email address.");
       if (!apiEnabled) throw new Error("Inviting staff needs a server. Set expo.extra.apiUrl in app.json.");
-      const r = await api("POST", "/invites", { email: addr, name: String(name || "").trim(), role: inviteRole || "estimator" });
-      await loadTeam(role);
+      const r = await api("POST", "/invites", { email: addr, name: String(name || "").trim(), roles: inviteRoles?.length ? inviteRoles : ["site_supervisor"] });
+      await loadTeam(roles);
       return r;
     },
-    [loadTeam, role]
+    [loadTeam, roles]
   );
 
   const revokeInvite = useCallback(
     async (email) => {
       await api("DELETE", `/invites/${encodeURIComponent(email)}`);
-      await loadTeam(role);
+      await loadTeam(roles);
     },
-    [loadTeam, role]
+    [loadTeam, roles]
   );
 
-  const setMemberRole = useCallback(
-    async (id, nextRole) => {
-      await api("PATCH", `/members/${encodeURIComponent(id)}`, { role: nextRole });
-      await loadTeam(role);
+  const setMemberRoles = useCallback(
+    async (id, nextRoles) => {
+      await api("PATCH", `/members/${encodeURIComponent(id)}`, { roles: nextRoles });
+      await loadTeam(roles);
     },
-    [loadTeam, role]
+    [loadTeam, roles]
   );
 
   const removeMember = useCallback(
     async (id) => {
       await api("DELETE", `/members/${encodeURIComponent(id)}`);
-      await loadTeam(role);
+      await loadTeam(roles);
     },
-    [loadTeam, role]
+    [loadTeam, roles]
   );
 
   const recheckInvites = useCallback(() => {
     refresh();
   }, [refresh]);
 
-  const effectiveRole = apiEnabled ? role : user ? "owner" : null;
+  const effectiveRoles = apiEnabled ? roles : user ? ["owner"] : [];
 
   const value = useMemo(
     () => ({
@@ -238,21 +256,23 @@ export function CompanyProvider({ children }) {
       company,
       members,
       invites,
-      role: effectiveRole,
-      isOwner: effectiveRole === "owner",
+      roles: effectiveRoles,
+      isOwner: effectiveRoles.includes("owner"),
       // What this person may do (the server enforces the same rules).
-      canManageTeam: effectiveRole === "owner" || effectiveRole === "admin",
-      canManageLibrary: effectiveRole === "owner" || effectiveRole === "admin",
-      canEditEstimates: effectiveRole !== "viewer" && !!effectiveRole,
+      canManageTeam: effectiveRoles.includes("owner") || effectiveRoles.includes("admin"),
+      canManageLibrary: effectiveRoles.includes("owner") || effectiveRoles.includes("admin"),
+      canEditEstimates: effectiveRoles.length > 0 && effectiveRoles.some((r) => r !== "viewer"),
+      // Creating/renaming a project is a PM/Admin/Owner job (see apps/api/src/routes/projects.ts).
+      canManageProjects: effectiveRoles.includes("owner") || effectiveRoles.includes("admin") || effectiveRoles.includes("project_manager"),
       createCompany,
       invite,
       revokeInvite,
-      setMemberRole,
+      setMemberRoles,
       removeMember,
       recheckInvites,
       refresh,
     }),
-    [profile, localLoaded, updateProfile, status, error, company, members, invites, effectiveRole, createCompany, invite, revokeInvite, setMemberRole, removeMember, recheckInvites, refresh]
+    [profile, localLoaded, updateProfile, status, error, company, members, invites, effectiveRoles, createCompany, invite, revokeInvite, setMemberRoles, removeMember, recheckInvites, refresh]
   );
 
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;

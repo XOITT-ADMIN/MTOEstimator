@@ -1,7 +1,7 @@
 import React from "react";
 import { View, Pressable } from "react-native";
 
-import { Segmented, SuggestChip, SearchField, Chip, ChipRow, Group, Section, ChoiceTile, Stepper, MoneyField, StockCard, Notice, Field, T, Icon, HStack, EmptyState, PickRow, colors } from "../../ui";
+import { Segmented, SuggestChip, SearchField, Chip, ChipRow, Group, Section, ChoiceTile, Stepper, MoneyField, Field, T, Icon, HStack, EmptyState, PickRow, colors } from "../../ui";
 import { NONE, comboKey } from "./useAddItemWizard";
 
 // The Add item wizard's step bodies. Each takes the wizard object from useAddItemWizard.
@@ -58,17 +58,11 @@ export function TileStep({ w }) {
   let selected = null;
   let onPick = () => {};
   if (k === "material") {
-    options = w.catalog.materials.map((m) => {
-      const left = w.materialAvailability[m];
-      return { value: m, title: m, sub: left == null ? "Not in stock" : left <= 0 ? "Out of stock" : "In stock", subTone: left == null || left <= 0 ? "dangerInk" : "successInk" };
-    });
+    options = w.catalog.materials.map((m) => ({ value: m, title: m }));
     selected = w.material;
     onPick = w.pickMaterial;
   } else if (k === "size") {
-    options = w.catalog.sizes.map((s) => {
-      const left = w.sizeAvailability[s];
-      return { value: s, title: s, sub: left == null ? "Not in stock" : left <= 0 ? "Out of stock" : `${Math.round(left * 100) / 100} ${w.unit || ""} left`, subTone: left == null || left <= 0 ? "dangerInk" : "successInk" };
-    });
+    options = w.catalog.sizes.map((s) => ({ value: s, title: s }));
     selected = w.size;
     onPick = w.pickSize;
   } else if (k === "secondarySize") {
@@ -108,7 +102,6 @@ export function QtyStep({ w }) {
     w.isPlumbing && (w.secondarySize || w.secondaryRequired) ? { key: "secondarySize", label: "Reduces to", value: w.secondarySize || "Required" } : null,
     !w.isPlumbing && (w.core || w.coreRequired) ? { key: "core", label: "Core", value: w.core || "Required" } : null,
   ].filter(Boolean);
-  const a = w.availability;
   return (
     <View style={{ gap: 14 }}>
       <Group style={{ borderRadius: 14 }}>
@@ -137,14 +130,6 @@ export function QtyStep({ w }) {
           </T>
         ) : null}
       </Section>
-
-      {a ? <StockCard label={`${w.material} ${w.size}`.toUpperCase()} available={a.available} used={a.used} stock={a.stock} unit={a.unit || w.unit} qty={w.qty} /> : null}
-      {w.stockProblem ? (
-        <Notice icon="alert" tone={w.stockPolicy === "block" ? "danger" : "warning"}>
-          {w.stockProblem.message}
-          {w.stockPolicy === "block" ? "" : " Your company allows it, so you can still add the line."}
-        </Notice>
-      ) : null}
 
       <Section title="Rates" style={{ marginTop: 0 }} gap={8}>
         <View style={{ flexDirection: "row", gap: 10 }}>

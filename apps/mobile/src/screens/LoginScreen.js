@@ -52,7 +52,7 @@ function EstimateGhost() {
     <View pointerEvents="none" style={{ position: "absolute", right: -26, top: 40, width: 170, padding: 14, borderWidth: 1.5, borderStyle: "dashed", borderColor: "rgba(143,184,230,0.55)", borderRadius: 14, gap: 10, backgroundColor: "rgba(31,33,80,0.4)" }}>
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
         <T size={10} weight={600} color="#8FB8E6" style={{ letterSpacing: 1 }}>
-          EST-0001
+          MTO-0001
         </T>
         <View style={{ width: 28, height: 10, borderRadius: 5, backgroundColor: "rgba(69,137,204,0.6)" }} />
       </View>

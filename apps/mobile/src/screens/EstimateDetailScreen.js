@@ -6,37 +6,38 @@ import { EstimateHeader } from "../features/estimate/EstimateHeader";
 import { ItemsTab } from "../features/estimate/ItemsTab";
 import { DetailsTab } from "../features/estimate/DetailsTab";
 import { SummaryTab } from "../features/estimate/SummaryTab";
+import { HistoryTab } from "../features/estimate/HistoryTab";
+import { ActionBar } from "../features/estimate/ActionBar";
 import { money, plural } from "../features/estimates";
 import { useEstimates } from "../context/EstimatesContext";
 import { useCompany } from "../context/CompanyContext";
+import { useAuth } from "../context/AuthContext";
 import { useInventory } from "../inventory/InventoryContext";
-import { notifyEstimateReady, shareEstimateByEmail, shareEstimateByWhatsApp } from "../utils/exportEstimate";
+import { shareEstimateByEmail, shareEstimateByWhatsApp } from "../utils/exportEstimate";
 import { calculateEstimateBreakdown } from "../pricing/calculations";
 import { confirmAction, notify } from "../utils/confirm";
 
-// One estimate: header + Details / Items / Summary. The tabs live in features/estimate/.
+// One MTO: header + Details / Items / Summary / History, and the Action Bar for whatever move
+// (Submit, Approve, Reject, …) the signed-in person can make right now.
 export default function EstimateDetailScreen({ route, navigation }) {
   const { estimateId } = route.params;
-  const { getEstimate, updateEstimate, removeItem, duplicateItem } = useEstimates();
-  const { profile: companyProfile, serverMode, status: companyStatus, canManageTeam, canEditEstimates = true } = useCompany();
-  const { getAvailability, checkNewLines, stockPolicy } = useInventory();
+  const { getEstimate, updateEstimate, removeItem, duplicateItem, transitionMto, fetchHistory } = useEstimates();
+  const { user } = useAuth();
+  const { profile: companyProfile, roles, canEditEstimates = true } = useCompany();
+  const { getAvailability } = useInventory();
 
-  // Duplicating a line takes the same stock again, so it gets the same check as Add item.
   function duplicateLine(it) {
-    const problems = checkNewLines([it]);
-    if (problems.length && stockPolicy === "block") {
-      notify("Can't duplicate — not in stock", problems.join("\n"));
-      return;
-    }
     duplicateItem(estimate.id, it.id);
-    if (problems.length) notify("Duplicated — stock is short", problems.join("\n"));
   }
-  // In a shared workspace only owners/admins approve, reject or complete (the server enforces it too).
-  const canApprove = !(serverMode && companyStatus === "member") || canManageTeam;
   const estimate = getEstimate(estimateId);
+  const isOwnMto = !estimate?.createdBy || estimate.createdBy.id === user?.uid;
   const [tab, setTab] = useState("items");
   const [sharing, setSharing] = useState(null);
   const breakdown = useMemo(() => (estimate ? calculateEstimateBreakdown(estimate) : null), [estimate]);
+
+  async function transition(to, comment) {
+    await transitionMto(estimate.id, to, comment);
+  }
 
   if (!estimate) {
     return (
@@ -47,18 +48,12 @@ export default function EstimateDetailScreen({ route, navigation }) {
   }
 
   const update = (patch) => updateEstimate(estimate.id, patch);
-  // Field engineer just marked it Ready: take them straight to Email / WhatsApp, and
-  // best-effort email the admin notification address a copy of the PDF (Settings › Notifications).
-  const updateDetails = (patch) => {
-    update(patch);
-    if (patch.status === "Ready" && estimate.status !== "Ready") {
-      navigation.navigate("PdfPreview", { estimateId: estimate.id, justReady: true });
-      notifyEstimateReady(estimate, companyProfile);
-    }
-  };
   const openPdf = () => navigation.navigate("PdfPreview", { estimateId: estimate.id });
   const addItem = () => navigation.navigate("AddItem", { estimateId: estimate.id });
   const trades = Array.from(new Set(estimate.items.map((i) => i.trade)));
+  // Once an MTO has moved past Draft/Rejected the only way to change it is the Action Bar —
+  // editing its fields is refused server-side (see EDITABLE_STATUSES in apps/api).
+  const canEdit = canEditEstimates && (estimate.status === "DRAFT" || estimate.status === "REJECTED");
 
   async function removeLine(item) {
     if (await confirmAction({ title: "Remove this line?", message: `${item.item} · ${item.material}`, confirmText: "Remove", destructive: true })) removeItem(estimate.id, item.id);
@@ -87,38 +82,43 @@ export default function EstimateDetailScreen({ route, navigation }) {
             estimate={estimate}
             breakdown={breakdown}
             getAvailability={getAvailability}
-            canEdit={canEditEstimates}
+            canEdit={canEdit}
             onAdd={addItem}
             onEdit={(it) => navigation.navigate("AddItem", { estimateId: estimate.id, editItemId: it.id })}
             onDuplicate={duplicateLine}
             onRemove={removeLine}
           />
         ) : tab === "details" ? (
-          <DetailsTab estimate={estimate} update={updateDetails} canApprove={canApprove} canEdit={canEditEstimates} />
+          <DetailsTab estimate={estimate} update={update} canEdit={canEdit} />
+        ) : tab === "history" ? (
+          <HistoryTab estimateId={estimate.id} fetchHistory={fetchHistory} />
         ) : (
-          <SummaryTab estimate={estimate} breakdown={breakdown} update={update} canEdit={canEditEstimates} />
+          <SummaryTab estimate={estimate} breakdown={breakdown} update={update} canEdit={canEdit} />
         )}
       </View>
 
-      {tab === "summary" ? (
-        <BottomBar style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16 }}>
-          <Button title="Export PDF" icon="fileDown" onPress={openPdf} style={{ flex: 1 }} />
-          <IconButton icon="mail" label="Share by email" variant="outlined" color="blue700" size={56} onPress={() => share("email")} disabled={!!sharing} />
-          <IconButton icon="chat" label="Share on WhatsApp" variant="outlined" color="blue700" size={56} onPress={() => share("whatsapp")} disabled={!!sharing} />
-        </BottomBar>
-      ) : (
-        <BottomBar style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16 }}>
-          <View style={{ flex: 1 }}>
-            <T variant="label" weight={400} num>
-              {plural(estimate.items.length, "item")} · {plural(trades.length, "trade")}
-            </T>
-            <T variant="cardTitle" color="text" num>
-              {money(breakdown.grandTotal)}
-            </T>
+      <BottomBar style={{ gap: 10, paddingHorizontal: 16 }}>
+        <ActionBar estimate={estimate} roles={roles} isOwnMto={isOwnMto} onTransition={transition} />
+        {tab === "history" ? null : tab === "summary" ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <Button title="Export PDF" icon="fileDown" onPress={openPdf} style={{ flex: 1 }} />
+            <IconButton icon="mail" label="Share by email" variant="outlined" color="blue700" size={56} onPress={() => share("email")} disabled={!!sharing} />
+            <IconButton icon="chat" label="Share on WhatsApp" variant="outlined" color="blue700" size={56} onPress={() => share("whatsapp")} disabled={!!sharing} />
           </View>
-          {canEditEstimates ? <Button title="Add item" icon="plus" onPress={addItem} style={{ paddingHorizontal: 22 }} /> : null}
-        </BottomBar>
-      )}
+        ) : (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <View style={{ flex: 1 }}>
+              <T variant="label" weight={400} num>
+                {plural(estimate.items.length, "item")} · {plural(trades.length, "trade")}
+              </T>
+              <T variant="cardTitle" color="text" num>
+                {money(breakdown.grandTotal)}
+              </T>
+            </View>
+            {canEdit ? <Button title="Add item" icon="plus" onPress={addItem} style={{ paddingHorizontal: 22 }} /> : null}
+          </View>
+        )}
+      </BottomBar>
     </View>
   );
 }

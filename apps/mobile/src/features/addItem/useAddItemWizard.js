@@ -4,10 +4,6 @@ import { tradeCatalog, tradeItems, findItem, unitFor } from "../../data/catalog"
 import { useCatalog } from "../../library/CatalogContext";
 import { useEstimates } from "../../context/EstimatesContext";
 import { useRates } from "../../pricing/RatesContext";
-import { useInventory } from "../../inventory/InventoryContext";
-import { stockKey } from "../../inventory/stockCsv";
-import { useCompany } from "../../context/CompanyContext";
-import { notify } from "../../utils/confirm";
 import { calculateItemMaterialTotal, calculateItemLabourTotal, calculateItemTotal } from "../../pricing/calculations";
 
 // ── The Add item flow, lifted straight from the MTO sheets ───────────────────
@@ -57,11 +53,6 @@ function useQuickPicks(estimates, trade, catalog) {
 export function useAddItemWizard({ estimateId, editItemId, onDone }) {
   const { estimates, getEstimate, addItem, updateItem } = useEstimates();
   const { getRate } = useRates();
-  const { getAvailability, availabilityFor } = useInventory();
-  const { company } = useCompany();
-  // "block" (default): a line can't take more than is in stock, and an item with no stock line
-  // at all can't be added. "warn": it can, but the shortage is shown in red. Same rule as the API.
-  const stockPolicy = company?.stockPolicy === "warn" ? "warn" : "block";
   const estimate = getEstimate(estimateId);
   const editingItem = editItemId ? estimate?.items.find((it) => it.id === editItemId) : null;
   const isEditing = !!editingItem;
@@ -217,66 +208,8 @@ export function useAddItemWizard({ estimateId, editItemId, onDone }) {
   const errors = {};
   if (qtyNum <= 0) errors.qty = "Quantity must be more than 0";
   const specComplete = !!(itemName && material && size);
-
-  // Stock check — same key as the stock library line. Editing a line must not count its own
-  // current quantity as "used", otherwise it would look over-drawn against itself.
-  const availability = useMemo(() => {
-    if (!specComplete) return null;
-    const a = getAvailability({ trade, item: itemName, material, size, secondarySize: isPlumbing ? secondarySize : null, core: isPlumbing ? null : core });
-    if (!a) return null;
-    const ownQty = isEditing ? Number(editingItem.qty) || 0 : 0;
-    const available = Math.round((a.available + ownQty) * 100) / 100;
-    return { ...a, available, used: Math.max(0, Math.round((a.used - ownQty) * 100) / 100) };
-  }, [specComplete, getAvailability, trade, itemName, material, size, secondarySize, core, isPlumbing, isEditing, editingItem]);
-
-  // Stock check. Two ways a line can fail:
-  //   · "none"  — nothing in the stock library for this item · material · size (· core)
-  //   · "short" — there is a stock line, but not enough left for this quantity
-  // An existing line that isn't changing its item and isn't asking for more stays saveable, so
-  // old estimates made before a stock line was removed can still be edited.
-  const stockProblem = useMemo(() => {
-    if (!specComplete || qtyNum <= 0) return null;
-    const pick = { trade, item: itemName, material, size, secondarySize: isPlumbing ? secondarySize : null, core: isPlumbing ? null : core };
-    const what = [itemName, material, size, isPlumbing ? secondarySize : core].filter(Boolean).join(" · ");
-    const fmt = (n) => String(Math.round(n * 100) / 100);
-    if (!availability) {
-      const keepsOld = isEditing && stockKey(editingItem) === stockKey(pick) && qtyNum <= (Number(editingItem.qty) || 0);
-      if (keepsOld) return null;
-      return { kind: "none", title: "Not in stock", message: `${what} is not in stock. There is no stock line for it in the library — ask your admin to add it under Library › Stock.` };
-    }
-    if (availability.available - qtyNum >= 0) return null;
-    const left = Math.max(0, availability.available);
-    const u = availability.unit || unit || "";
-    return left > 0
-      ? { kind: "short", title: "Not enough stock", message: `Only ${fmt(left)} ${u} of ${what} is left — this line needs ${fmt(qtyNum)} ${u}.` }
-      : { kind: "short", title: "Out of stock", message: `${what} is out of stock. Nothing is left to use.` };
-  }, [specComplete, qtyNum, trade, itemName, material, size, secondarySize, core, isPlumbing, availability, isEditing, editingItem, unit]);
-
-  if (stockProblem && stockPolicy === "block") errors.stock = stockProblem.message;
   const isValid = specComplete && Object.keys(errors).length === 0;
-  // The Add button stays tappable when the only problem is stock, so a tap explains why.
   const canTry = specComplete && !errors.qty;
-
-  // "N left" under each size once item + material are known. A size with no stock line at all
-  // is missing from the map, and the size step shows it as "Not in stock".
-  const sizeAvailability = useMemo(() => {
-    if (!itemName || !material) return {};
-    const map = {};
-    availabilityFor(trade, itemName, material).forEach((l) => {
-      map[l.size] = (map[l.size] || 0) + l.available;
-    });
-    return map;
-  }, [availabilityFor, trade, itemName, material]);
-
-  // Materials that have at least one stock line for the chosen item — the rest show "Not in stock".
-  const materialAvailability = useMemo(() => {
-    if (!itemName) return {};
-    const map = {};
-    availabilityFor(trade, itemName).forEach((l) => {
-      map[l.material] = (map[l.material] || 0) + l.available;
-    });
-    return map;
-  }, [availabilityFor, trade, itemName]);
 
   // Item step: families → items, filtered by search + family chip.
   const itemSections = useMemo(() => {
@@ -321,10 +254,6 @@ export function useAddItemWizard({ estimateId, editItemId, onDone }) {
   }
 
   function save(addAnother) {
-    if (errors.stock) {
-      notify(stockProblem?.title || "Not in stock", errors.stock);
-      return false;
-    }
     if (!isValid) return false;
     if (isEditing) {
       updateItem(estimateId, editItemId, payload());
@@ -375,8 +304,6 @@ export function useAddItemWizard({ estimateId, editItemId, onDone }) {
     familyFilter,
     setFamilyFilter,
     itemSections,
-    sizeAvailability,
-    materialAvailability,
     // qty & rate
     qty: qtyNum,
     setQty,
@@ -389,12 +316,9 @@ export function useAddItemWizard({ estimateId, editItemId, onDone }) {
     setRemarks,
     totals,
     errors,
-    availability,
     specComplete,
     isValid,
     canTry,
-    stockProblem,
-    stockPolicy,
     save,
   };
 }

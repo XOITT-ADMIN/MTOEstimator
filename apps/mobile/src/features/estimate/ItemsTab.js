@@ -93,7 +93,7 @@ export function ItemsTab({ estimate, breakdown, getAvailability, canEdit, onEdit
                 key={it.id}
                 it={it}
                 availability={getAvailability?.(it)}
-                onPress={() => onEdit(it)}
+                onPress={canEdit ? () => onEdit(it) : undefined}
                 onDuplicate={canEdit ? () => onDuplicate(it) : undefined}
                 onRemove={canEdit ? () => onRemove(it) : undefined}
               />

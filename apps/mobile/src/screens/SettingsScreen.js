@@ -6,17 +6,16 @@ import { ProfileField } from "../features/settings/ProfileField";
 import { SecuritySection } from "../features/settings/SecuritySection";
 import { plural, shortDate } from "../features/estimates";
 import { useAuth } from "../context/AuthContext";
-import { useCompany } from "../context/CompanyContext";
+import { useCompany, rolesLabel } from "../context/CompanyContext";
 import { useEstimates } from "../context/EstimatesContext";
 import { confirmAction } from "../utils/confirm";
 
-const ROLE_LABEL = { owner: "Owner", admin: "Admin", estimator: "Field engineer", viewer: "Viewer" };
 const APP_VERSION = "2.0";
 
 // Settings: account, team, what's printed on quotations, data, security, sign out.
 export default function SettingsScreen({ navigation }) {
   const { user, signOut } = useAuth();
-  const { profile, updateProfile, status, company, members, canManageTeam, role, serverMode } = useCompany();
+  const { profile, updateProfile, status, company, members, canManageTeam, roles, serverMode } = useCompany();
   const { estimates, pending, online } = useEstimates();
   const connected = status === "member";
   const canEditCompany = !connected || canManageTeam;
@@ -60,7 +59,7 @@ export default function SettingsScreen({ navigation }) {
               {user?.email || "—"}
             </T>
           </View>
-          {connected && role ? <RolePill role={role} label={ROLE_LABEL[role] || role} /> : null}
+          {connected && roles.length ? <RolePill roles={roles} label={rolesLabel(roles)} /> : null}
         </Card>
       </Section>
 

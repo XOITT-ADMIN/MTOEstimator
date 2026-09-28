@@ -35,10 +35,10 @@ async function signIn(email: string, name: string) {
 }
 
 const line = (id: string, qty: number) => ({ id, trade: "Plumbing", family: "Pipe", item: "Pipe", material: "PVC", size: "40 mm", secondarySize: null, core: null, qty, unit: "m" });
-const estimate = (id: string, qty: number, extra: J = {}) => ({ id, name: `Est ${id}`, status: "Draft", updatedAt: Date.now(), items: [line(`${id}-l1`, qty)], ...extra });
+const estimate = (id: string, projectId: string, qty: number, extra: J = {}) => ({ id, name: `Est ${id}`, projectId, updatedAt: Date.now(), items: [line(`${id}-l1`, qty)], ...extra });
 const PIPE_KEY = "Plumbing|Pipe|PVC|40 mm||";
 
-let owner: string, eng1: string, eng2: string;
+let owner: string, eng1: string, eng2: string, pm: string, finance: string;
 
 before(async () => {
   execSync("npx prisma migrate reset --force", { env: { ...process.env, DATABASE_URL: url, PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION: "yes" }, stdio: "pipe" });
@@ -60,22 +60,40 @@ describe("company + team", () => {
 
     const c = await call("POST", "/companies", owner, { name: "Katvora Test" });
     assert.equal(c.status, 200);
-    assert.equal(c.json.membership.role, "owner");
+    assert.deepEqual(c.json.membership.roles, ["owner"]);
 
     for (const [email, name] of [["eng1@test.dev", "Ravi"], ["eng2@test.dev", "Anil"]]) {
-      const inv = await call("POST", "/invites", owner, { email, name, role: "estimator" });
+      const inv = await call("POST", "/invites", owner, { email, name, roles: ["site_supervisor"] });
       assert.equal(inv.status, 200, JSON.stringify(inv.json));
     }
+    await call("POST", "/invites", owner, { email: "pm@test.dev", name: "Priya", roles: ["project_manager"] });
+    await call("POST", "/invites", owner, { email: "finance@test.dev", name: "Farhan", roles: ["finance"] });
     eng1 = await signIn("eng1@test.dev", "Ravi");
     eng2 = await signIn("eng2@test.dev", "Anil");
+    pm = await signIn("pm@test.dev", "Priya");
+    finance = await signIn("finance@test.dev", "Farhan");
     me = await call("GET", "/me", eng1);
-    assert.equal(me.json.membership.role, "estimator");
+    assert.deepEqual(me.json.membership.roles, ["site_supervisor"]);
     assert.equal(me.json.company.name, "Katvora Test");
     await call("GET", "/me", eng2);
+    // /me is what accepts a pending invite (the app calls it right after sign-in) — the PM and
+    // Finance accounts below need their membership to exist before they can be used.
+    assert.deepEqual((await call("GET", "/me", pm)).json.membership.roles, ["project_manager"]);
+    assert.deepEqual((await call("GET", "/me", finance)).json.membership.roles, ["finance"]);
 
     const members = await call("GET", "/members", owner);
-    assert.equal(members.json.length, 3);
+    assert.equal(members.json.length, 5);
     assert.equal((await call("GET", "/invites", owner)).json.length, 0);
+  });
+
+  test("admin can hold more than one role at once", async () => {
+    const set = await call("PATCH", `/members/${(await call("GET", "/members", owner)).json.find((x: J) => x.email === "pm@test.dev").id}`, owner, {
+      roles: ["project_manager", "procurement"],
+    });
+    assert.equal(set.status, 200, JSON.stringify(set.json));
+    assert.deepEqual(set.json.roles.sort(), ["procurement", "project_manager"]);
+    // back to just PM for the rest of the tests
+    await call("PATCH", `/members/${set.json.id}`, owner, { roles: ["project_manager"] });
   });
 
   test("engineers can't invite or change the company", async () => {
@@ -175,84 +193,134 @@ describe("library + stock", () => {
   });
 });
 
-describe("estimates + live stock", () => {
-  test("server numbers estimates and engineers only see their own", async () => {
-    const a = await call("POST", "/sync/estimates", eng1, { upserts: [estimate("e1-a", 2)] });
+describe("projects", () => {
+  test("only PM/Admin/Owner create projects; duplicate names are refused", async () => {
+    const bad = await call("POST", "/projects", eng1, { name: "Whitefield Tower" });
+    assert.equal(bad.status, 403);
+
+    const ok = await call("POST", "/projects", owner, { name: "Whitefield Tower", siteName: "Whitefield, Bengaluru" });
+    assert.equal(ok.status, 200, JSON.stringify(ok.json));
+    assert.equal(ok.json.status, "open");
+
+    const dupe = await call("POST", "/projects", pm, { name: "Whitefield Tower" });
+    assert.equal(dupe.status, 409);
+
+    const list = await call("GET", "/projects", eng1);
+    assert.ok(list.json.some((p: J) => p.name === "Whitefield Tower"));
+  });
+});
+
+describe("mto workflow", () => {
+  let projectId: string;
+
+  test("server numbers MTOs and site supervisors only see their own", async () => {
+    projectId = (await call("GET", "/projects", owner)).json.find((p: J) => p.name === "Whitefield Tower").id;
+
+    const a = await call("POST", "/sync/estimates", eng1, { upserts: [estimate("e1-a", projectId, 2)] });
     assert.equal(a.json.results[0].ok, true, JSON.stringify(a.json));
-    assert.equal(a.json.results[0].item.estimateNumber, "EST-0001");
-    const b = await call("POST", "/sync/estimates", eng2, { upserts: [estimate("e2-a", 1)] });
-    assert.equal(b.json.results[0].item.estimateNumber, "EST-0002");
+    assert.equal(a.json.results[0].item.estimateNumber, "MTO-0001");
+    assert.equal(a.json.results[0].item.status, "DRAFT");
+    const b = await call("POST", "/sync/estimates", eng2, { upserts: [estimate("e2-a", projectId, 1)] });
+    assert.equal(b.json.results[0].item.estimateNumber, "MTO-0002");
 
     assert.deepEqual((await call("GET", "/sync/estimates", eng1)).json.items.map((e: J) => e.id), ["e1-a"]);
     assert.equal((await call("GET", "/sync/estimates", owner)).json.items.length, 2);
 
-    // eng2 can't touch eng1's estimate
-    const steal = await call("POST", "/sync/estimates", eng2, { upserts: [estimate("e1-a", 0)] });
+    // eng2 can't touch eng1's MTO
+    const steal = await call("POST", "/sync/estimates", eng2, { upserts: [estimate("e1-a", projectId, 0)] });
     assert.equal(steal.json.results[0].code, "forbidden");
   });
 
-  test("stock shows what everyone has used; out of stock is refused", async () => {
-    let stock = (await call("GET", "/sync/stock", eng2)).json.items;
-    let pipe = stock.find((s: J) => s.key === PIPE_KEY);
-    assert.equal(pipe.stock, 10);
-    assert.equal(pipe.used, 3); // 2 (eng1) + 1 (eng2)
-    assert.equal(pipe.available, 7);
-
-    const tooMuch = await call("POST", "/sync/estimates", eng2, { upserts: [estimate("e2-b", 8)] });
-    assert.equal(tooMuch.json.results[0].ok, false);
-    assert.equal(tooMuch.json.results[0].code, "out_of_stock");
-    assert.equal(tooMuch.json.results[0].details.shortages[0].available, 7);
-    assert.match(tooMuch.json.results[0].error, /Only 7 m left/);
-
-    // Editing an estimate doesn't double-count its own lines: e1-a 2 → 9 fits (10 − 1 other).
-    const grow = await call("POST", "/sync/estimates", eng1, { upserts: [estimate("e1-a", 9)] });
-    assert.equal(grow.json.results[0].ok, true, JSON.stringify(grow.json));
-    stock = (await call("GET", "/sync/stock", eng2)).json.items;
-    pipe = stock.find((s: J) => s.key === PIPE_KEY);
-    assert.equal(pipe.available, 0);
-    const out = await call("POST", "/sync/estimates", eng2, { upserts: [estimate("e2-c", 1)] });
-    assert.match(out.json.results[0].error, /out of stock/);
+  test("no stock check at MTO time — any item, any quantity goes straight in", async () => {
+    const stock = (await call("GET", "/sync/stock", eng2)).json.items.find((s: J) => s.key === PIPE_KEY);
+    assert.equal(stock.stock, 10);
+    const big = await call("POST", "/sync/estimates", eng2, { upserts: [estimate("e2-b", projectId, 999)] });
+    assert.equal(big.json.results[0].ok, true, JSON.stringify(big.json));
   });
 
-  test("two engineers racing for the last units: exactly one wins", async () => {
-    await call("POST", "/sync/estimates", eng1, { upserts: [estimate("e1-a", 1, { updatedAt: Date.now() + 1000 })] }); // frees 8 → available 8
-    const [r1, r2] = await Promise.all([
-      call("POST", "/sync/estimates", eng1, { upserts: [estimate("race-1", 6)] }),
-      call("POST", "/sync/estimates", eng2, { upserts: [estimate("race-2", 6)] }),
-    ]);
-    const oks = [r1, r2].map((r) => r.json.results[0].ok);
-    assert.deepEqual(oks.sort(), [false, true], JSON.stringify([r1.json, r2.json]));
-    const pipe = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY);
-    assert.equal(pipe.used, 8); // 1 + 1 + 6
-    assert.equal(pipe.available, 2);
+  test("submit needs a line and an open project; then the approval loop with comments", async () => {
+    const emptyProject = await call("POST", "/projects", owner, { name: "Empty Site" });
+    const emptyMto = await call("POST", "/sync/estimates", eng1, { upserts: [{ id: "e-empty", name: "x", projectId: emptyProject.json.id, updatedAt: Date.now(), items: [] }] });
+    assert.equal(emptyMto.json.results[0].ok, true);
+    const noLines = await call("POST", "/mtos/e-empty/transition", eng1, { to: "SUBMITTED" });
+    assert.equal(noLines.status, 400);
+    assert.match(noLines.json.error, /at least one item/);
+
+    // Site Supervisor submits; PM rejects with a comment; Supervisor edits and resubmits.
+    const submit = await call("POST", "/mtos/e1-a/transition", eng1, { to: "SUBMITTED" });
+    assert.equal(submit.status, 200, JSON.stringify(submit.json));
+    assert.equal(submit.json.item.status, "SUBMITTED");
+
+    const wrongRole = await call("POST", "/mtos/e1-a/transition", eng1, { to: "APPROVED" });
+    assert.equal(wrongRole.status, 403);
+
+    const noComment = await call("POST", "/mtos/e1-a/transition", pm, { to: "REJECTED" });
+    assert.equal(noComment.status, 400);
+    const reject = await call("POST", "/mtos/e1-a/transition", pm, { to: "REJECTED", comment: "Wrong pipe size for this site." });
+    assert.equal(reject.status, 200, JSON.stringify(reject.json));
+    assert.equal(reject.json.item.status, "REJECTED");
+
+    // Editable again now it's Rejected.
+    const edited = await call("POST", "/sync/estimates", eng1, { upserts: [estimate("e1-a", projectId, 3, { updatedAt: Date.now() + 1000 })] });
+    assert.equal(edited.json.results[0].ok, true, JSON.stringify(edited.json));
+
+    const resubmit = await call("POST", "/mtos/e1-a/transition", eng1, { to: "SUBMITTED" });
+    assert.equal(resubmit.status, 200);
+    const approve = await call("POST", "/mtos/e1-a/transition", pm, { to: "APPROVED" });
+    assert.equal(approve.status, 200, JSON.stringify(approve.json));
+
+    const sentBack = await call("POST", "/mtos/e1-a/transition", finance, { to: "SENT_BACK", comment: "Confirm budget code first." });
+    assert.equal(sentBack.status, 200, JSON.stringify(sentBack.json));
+    const reapprove = await call("POST", "/mtos/e1-a/transition", pm, { to: "APPROVED" });
+    assert.equal(reapprove.status, 200);
+    const budgetOk = await call("POST", "/mtos/e1-a/transition", finance, { to: "BUDGET_OK" });
+    assert.equal(budgetOk.status, 200, JSON.stringify(budgetOk.json));
+    assert.equal(budgetOk.json.item.status, "BUDGET_OK");
+
+    const hist = await call("GET", "/mtos/e1-a/history", owner);
+    assert.deepEqual(
+      hist.json.map((h: J) => h.to),
+      ["DRAFT", "SUBMITTED", "REJECTED", "SUBMITTED", "APPROVED", "SENT_BACK", "APPROVED", "BUDGET_OK"]
+    );
+    assert.equal(hist.json.find((h: J) => h.to === "REJECTED").comment, "Wrong pipe size for this site.");
   });
 
-  test("only admins approve/reject; rejecting releases stock", async () => {
-    const { items } = (await call("GET", "/sync/estimates", eng1)).json;
-    const e = items.find((x: J) => x.id === "e1-a");
-    const selfApprove = await call("POST", "/sync/estimates", eng1, { upserts: [{ ...e, status: "Approved", updatedAt: Date.now() + 2000 }] });
-    assert.equal(selfApprove.json.results[0].code, "forbidden");
+  test("editing is refused once an MTO has moved on", async () => {
+    const r = await call("POST", "/sync/estimates", eng1, { upserts: [estimate("e1-a", projectId, 5, { updatedAt: Date.now() + 5000 })] });
+    assert.equal(r.json.results[0].ok, false);
+    assert.equal(r.json.results[0].code, "not_editable");
+  });
 
-    const before = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).available;
-    const reject = await call("POST", "/sync/estimates", owner, { upserts: [{ ...e, status: "Rejected", updatedAt: Date.now() + 3000 }] });
-    assert.equal(reject.json.results[0].ok, true, JSON.stringify(reject.json));
-    const afterAvail = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).available;
-    assert.equal(afterAvail, before + 1);
+  test("only a Draft can be deleted outright", async () => {
+    const del = await call("POST", "/sync/estimates", eng2, { deletes: ["e2-a"] });
+    assert.equal(del.json.results[0].ok, true);
+    assert.ok(!(await call("GET", "/sync/estimates", eng2)).json.items.some((x: J) => x.id === "e2-a"));
+
+    // e1-a is Budget OK now — deleting it is refused.
+    const cant = await call("POST", "/sync/estimates", eng1, { deletes: ["e1-a"] });
+    assert.equal(cant.json.results[0].ok, false);
+    assert.equal(cant.json.results[0].code, "not_deletable");
+  });
+
+  test("inbox shows what's waiting on each role, plus mine", async () => {
+    await call("POST", "/sync/estimates", eng1, { upserts: [estimate("e1-c", projectId, 1)] });
+    await call("POST", "/mtos/e1-c/transition", eng1, { to: "SUBMITTED" });
+
+    const pmInbox = await call("GET", "/mtos/inbox", pm);
+    assert.ok(pmInbox.json.waiting.some((e: J) => e.id === "e1-c"));
+
+    const engInbox = await call("GET", "/mtos/inbox", eng1);
+    assert.ok(engInbox.json.mine.some((e: J) => e.id === "e1-c"));
+    assert.ok(!engInbox.json.waiting.some((e: J) => e.id === "e1-c")); // not a PM
+
+    const financeInbox = await call("GET", "/mtos/inbox", finance);
+    assert.ok(!financeInbox.json.waiting.some((e: J) => e.id === "e1-c")); // still Submitted, not Approved yet
   });
 
   test("an older copy never overwrites a newer one (stale)", async () => {
-    const r = await call("POST", "/sync/estimates", eng2, { upserts: [estimate("e2-a", 1, { updatedAt: 1, name: "old copy" })] });
+    const r = await call("POST", "/sync/estimates", eng2, { upserts: [estimate("e2-b", projectId, 1, { updatedAt: 1, name: "old copy" })] });
     assert.equal(r.json.results[0].stale, true);
-    assert.equal(r.json.results[0].item.name, "Est e2-a");
-  });
-
-  test("deleting an estimate releases its stock", async () => {
-    const before = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).used;
-    const d = await call("POST", "/sync/estimates", eng2, { deletes: ["e2-a"] });
-    assert.equal(d.json.results[0].ok, true);
-    const pipe = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY);
-    assert.equal(pipe.used, before - 1);
-    assert.ok(!(await call("GET", "/sync/estimates", eng2)).json.items.some((x: J) => x.id === "e2-a"));
+    assert.equal(r.json.results[0].item.name, "Est e2-b");
   });
 
   test("websocket tells other devices that stock changed", async () => {

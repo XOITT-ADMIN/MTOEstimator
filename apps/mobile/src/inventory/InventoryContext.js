@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useMemo, useCallback, useState } from "react";
 
-import { useEstimates } from "../context/EstimatesContext";
 import { useLocalCollection } from "../storage/useLocalCollection";
 import { useCompany, useCompanyRemote } from "../context/CompanyContext";
 import { findItem } from "../data/catalog";
@@ -8,15 +7,15 @@ import { stockKey, buildStockCsv, parseStockCsv } from "./stockCsv";
 
 const STORAGE_KEY = "mto-estimator/stock.v1";
 
-// Estimates in these states no longer draw on stock.
-const RELEASED_STATUSES = new Set(["Rejected"]);
-
 const InventoryContext = createContext(null);
 
 // Stock lines are keyed exactly like an estimate line — trade · item · material · size
 // (· secondary size · core) — so a take-off line and a stock line always mean the same thing.
-// "Used" is never stored: it is summed from the estimates every render, so adding, editing or
-// removing a line anywhere in the app moves the available figure straight away.
+//
+// Since the Sept 2026 rebuild, creating or editing an MTO never checks or reserves stock —
+// that moved to Procurement, at issue time (see XMTO_BUILD_BRIEF.md section 6). So stock on
+// hand is simply what's available; nothing here is drawn down until a later phase adds the
+// issue/receive ledger.
 function seedStock() {
   const mk = (e) => {
     const key = stockKey(e);
@@ -34,12 +33,8 @@ function seedStock() {
 }
 
 export function InventoryProvider({ children }) {
-  const { estimates } = useEstimates();
   const remote = useCompanyRemote("stock");
-  const { canManageLibrary, company } = useCompany();
-  // Company rule for estimates: "block" (default) refuses lines with no / not enough stock,
-  // "warn" allows them and shows the shortage in red. The API applies the same rule.
-  const stockPolicy = company?.stockPolicy === "warn" ? "warn" : "block";
+  const { canManageLibrary } = useCompany();
   const { items: stock, loaded, apply: applyStock, syncError: collectionError, clearSyncError: clearCollectionError } = useLocalCollection({
     localKey: STORAGE_KEY,
     seed: seedStock,
@@ -64,56 +59,18 @@ export function InventoryProvider({ children }) {
     clearCollectionError();
   }, [clearCollectionError]);
 
-  // key → { used, lines: [{ estimateId, estimateName, estimateNumber, qty }] }
-  const usage = useMemo(() => {
-    const map = new Map();
-    estimates.forEach((e) => {
-      if (RELEASED_STATUSES.has(e.status)) return;
-      (e.items || []).forEach((it) => {
-        const k = stockKey(it);
-        const cur = map.get(k) || { used: 0, lines: [] };
-        cur.used = Math.round((cur.used + (Number(it.qty) || 0)) * 100) / 100;
-        cur.lines.push({ estimateId: e.id, estimateName: e.name, estimateNumber: e.estimateNumber, qty: it.qty });
-        map.set(k, cur);
-      });
-    });
-    return map;
-  }, [estimates]);
-
-  // With a server, `used` must include every engineer's estimates, not just the ones on this
-  // phone. The server sends each line's usage (s.usedIn, per estimate); we take everyone else's
-  // from there and our own from the local estimates, so our edits show up instantly and other
-  // people's arrive live over the WebSocket.
-  const usedFor = useCallback(
-    (s) => {
-      const mine = usage.get(s.key) || { used: 0, lines: [] };
-      if (!remote || !Array.isArray(s.usedIn)) return mine;
-      const localIds = new Set(estimates.map((e) => e.id));
-      const others = s.usedIn.filter((u) => !localIds.has(u.estimateId));
-      const otherQty = others.reduce((sum, u) => sum + (Number(u.qty) || 0), 0);
-      return { used: Math.round((mine.used + otherQty) * 100) / 100, lines: [...mine.lines, ...others] };
-    },
-    [usage, remote, estimates]
-  );
-
-  const lines = useMemo(
-    () =>
-      stock.map((s) => {
-        const u = usedFor(s);
-        return { ...s, used: u.used, available: Math.round((s.stock - u.used) * 100) / 100, usedIn: u.lines };
-      }),
-    [stock, usedFor]
-  );
+  // "Used" no longer means "drawn on by an estimate" — nothing reserves stock at MTO time
+  // anymore. It stays 0 until a later phase adds the issue/receive ledger; available == on hand.
+  const lines = useMemo(() => stock.map((s) => ({ ...s, used: 0, available: s.stock, usedIn: [] })), [stock]);
 
   const getAvailability = useCallback(
     (itemLike) => {
       const k = stockKey(itemLike);
       const s = stock.find((x) => x.key === k);
       if (!s) return null;
-      const used = usedFor(s).used;
-      return { key: k, stock: s.stock, used, available: Math.round((s.stock - used) * 100) / 100, unit: s.unit, price: Number(s.price) || 0 };
+      return { key: k, stock: s.stock, used: 0, available: s.stock, unit: s.unit, price: Number(s.price) || 0 };
     },
-    [stock, usedFor]
+    [stock]
   );
 
   // Availability for every stock line of an item (+ optional material) — used by the size step.
@@ -121,30 +78,6 @@ export function InventoryProvider({ children }) {
     (trade, item, material) =>
       lines.filter((l) => l.trade === trade && l.item === item && (!material || l.material === material)),
     [lines]
-  );
-
-  // Check lines about to be added to an estimate without the Add item wizard (duplicate line,
-  // duplicate estimate). Returns one plain message per problem; empty = all in stock.
-  const checkNewLines = useCallback(
-    (items) => {
-      const fmt = (n) => String(Math.round(n * 100) / 100);
-      const need = new Map();
-      (items || []).forEach((it) => {
-        const k = stockKey(it);
-        const cur = need.get(k);
-        need.set(k, { it, qty: (cur?.qty || 0) + (Number(it.qty) || 0) });
-      });
-      const problems = [];
-      need.forEach(({ it, qty }) => {
-        if (qty <= 0) return;
-        const what = [it.item, it.material, it.size, it.secondarySize || it.core].filter(Boolean).join(" · ");
-        const a = getAvailability(it);
-        if (!a) problems.push(`${what} is not in stock.`);
-        else if (a.available < qty) problems.push(a.available > 0 ? `Only ${fmt(a.available)} ${a.unit} of ${what} left — needs ${fmt(qty)}.` : `${what} is out of stock.`);
-      });
-      return problems;
-    },
-    [getAvailability]
   );
 
   const upsertLine = useCallback((entry) => {
@@ -217,8 +150,6 @@ export function InventoryProvider({ children }) {
       syncError,
       clearSyncError,
       canEdit: !readOnly,
-      stockPolicy,
-      checkNewLines,
       lines,
       getAvailability,
       availabilityFor,
@@ -230,7 +161,7 @@ export function InventoryProvider({ children }) {
       exportCsv,
       importCsv,
     }),
-    [loaded, syncError, clearSyncError, readOnly, stockPolicy, checkNewLines, lines, getAvailability, availabilityFor, upsertLine, setLineStock, updateLine, removeLine, bulkUpdate, exportCsv, importCsv]
+    [loaded, syncError, clearSyncError, readOnly, lines, getAvailability, availabilityFor, upsertLine, setLineStock, updateLine, removeLine, bulkUpdate, exportCsv, importCsv]
   );
 
   return <InventoryContext.Provider value={value}>{children}</InventoryContext.Provider>;

@@ -4,8 +4,8 @@ import { View } from "react-native";
 import { TopBar, IconButton, StatusBadge, Tabs, T, Icon, HStack } from "../../ui";
 import { useSyncState } from "../sync";
 
-// Top of the estimate screen: back · EST-0001 [Draft] ✓ Saved · project name · PDF button,
-// then the Details / Items / Summary tabs.
+// Top of the MTO screen: back · MTO-0001 [Draft] ✓ Saved · title · PDF button,
+// then the Details / Items / Summary / History tabs.
 export function EstimateHeader({ estimate, tab, onTab, onBack, onPdf }) {
   return (
     <TopBar
@@ -34,6 +34,7 @@ export function EstimateHeader({ estimate, tab, onTab, onBack, onPdf }) {
           { key: "details", label: "Details" },
           { key: "items", label: "Items", count: estimate.items.length },
           { key: "summary", label: "Summary" },
+          { key: "history", label: "History" },
         ]}
       />
     </TopBar>

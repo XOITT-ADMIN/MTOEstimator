@@ -4,8 +4,8 @@
 // query by the signed-in member's company. A person belongs to one company at a time.
 
 generator client {
-  provider     = "prisma-client"
-  output       = "../src/generated/prisma"
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
   moduleFormat        = "esm"
   importFileExtension = "js"
 }
@@ -15,37 +15,47 @@ datasource db {
 }
 
 enum Role {
-  owner     // created the company; full control, cannot be removed
-  admin     // manages library (rates, stock), team, approves estimates
-  estimator // field engineer: creates and edits their own estimates
-  viewer    // read-only
+  owner // created the company; full control, cannot be removed
+  admin // manages library (rates, stock), team; everything a PM can do
+  estimator // retired name for site_supervisor — kept so old rows still parse; migrated on upgrade
+  viewer // read-only
+  site_supervisor // field engineer: creates/submits MTOs, records site use and wastage
+  project_manager // creates/renames/closes projects; approves or rejects MTOs
+  finance // marks an approved MTO Budget OK or sends it back
+  procurement // issues stock / buys for an MTO, receives purchases, dispatch-ready
+  logistics // loading, dispatch and delivery
+}
+
+enum ProjectStatus {
+  open
+  closed
 }
 
 model User {
-  id        String      @id @default(cuid())
-  email     String      @unique
-  name      String
-  photo     String?
-  provider  String      @default("email")
-  createdAt DateTime    @default(now())
+  id         String      @id @default(cuid())
+  email      String      @unique
+  name       String
+  photo      String?
+  provider   String      @default("email")
+  createdAt  DateTime    @default(now())
   membership Membership?
-  sessions  Session[]
+  sessions   Session[]
 }
 
 // One row per signed-in device. The phone keeps a long-lived refresh token (only its hash is
 // stored here) and swaps it for a short-lived access token. Deleting / revoking the row signs
 // that device out at once — used for "Sign out of all devices" and lost phones.
 model Session {
-  id           String    @id @default(cuid())
-  userId       String
-  refreshHash  String    @unique
-  deviceName   String    @default("")
-  platform     String    @default("")
-  createdAt    DateTime  @default(now())
-  lastUsedAt   DateTime  @default(now())
-  expiresAt    DateTime  // slides forward on every refresh (idle timeout)
-  revokedAt    DateTime?
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id          String    @id @default(cuid())
+  userId      String
+  refreshHash String    @unique
+  deviceName  String    @default("")
+  platform    String    @default("")
+  createdAt   DateTime  @default(now())
+  lastUsedAt  DateTime  @default(now())
+  expiresAt   DateTime // slides forward on every refresh (idle timeout)
+  revokedAt   DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
@@ -55,25 +65,25 @@ model Company {
   name        String
   // Quotation letterhead: address, phone, email, gstin, termsAndConditions.
   profile     Json     @default("{}")
-  // "block" = the API refuses an estimate save that would take more than is in stock.
-  // "warn"  = it saves and the app shows the shortage in red.
-  stockPolicy String   @default("block")
+  // Retired (Phase 1): stock is no longer checked at estimate time. Column dropped once the
+  // data migration has run; left unused here only until that migration lands.
   estimateSeq Int      @default(0)
   createdAt   DateTime @default(now())
 
-  members     Membership[]
-  invites     Invite[]
-  estimates   Estimate[]
-  stock       StockLine[]
-  rates       RateOverride[]
-  catalogs    CatalogVersion[]
+  members   Membership[]
+  invites   Invite[]
+  estimates Estimate[]
+  stock     StockLine[]
+  rates     RateOverride[]
+  catalogs  CatalogVersion[]
+  projects  Project[]
 }
 
 model Membership {
   id        String   @id @default(cuid())
   companyId String
   userId    String   @unique
-  role      Role     @default(estimator)
+  roles     Role[]   @default([site_supervisor])
   createdAt DateTime @default(now())
   company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -87,13 +97,33 @@ model Invite {
   companyId   String
   email       String
   name        String   @default("")
-  role        Role     @default(estimator)
+  roles       Role[]   @default([site_supervisor])
   invitedById String
   createdAt   DateTime @default(now())
   company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@unique([companyId, email])
   @@index([email])
+}
+
+// A site or job the company is running. MTOs belong to one project each. Closing a project
+// (once installation is done) returns any leftover site material to stock.
+model Project {
+  id          String        @id @default(cuid())
+  companyId   String
+  name        String
+  siteName    String?
+  status      ProjectStatus @default(open)
+  createdById String
+  closedById  String?
+  closedAt    DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  estimates   Estimate[]
+
+  @@unique([companyId, name])
+  @@index([companyId, status])
 }
 
 model OtpCode {
@@ -106,26 +136,51 @@ model OtpCode {
   sentAt    DateTime @default(now())
 }
 
-// An estimate is stored as the same JSON document the app works with (`data`), plus a few
-// columns pulled out for filtering. Its lines are mirrored into EstimateLine so stock "used"
-// can be summed in SQL.
+// An MTO (material take-off / material request) — the model is still called Estimate for
+// continuity with the original quotation feature it grew from. Stored as the same JSON
+// document the app works with (`data`), plus a few columns pulled out for filtering.
 model Estimate {
-  companyId      String
-  id             String   // id generated by the app, unique inside the company
-  estimateNumber String
-  name           String
-  status         String   @default("Draft")
-  createdById    String
-  data           Json
-  clientUpdatedAt BigInt  // the app's updatedAt (ms) — used for last-write-wins
-  updatedAt      DateTime @updatedAt
-  createdAt      DateTime @default(now())
-  deletedAt      DateTime?
-  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  lines          EstimateLine[]
+  companyId       String
+  id              String // id generated by the app, unique inside the company
+  estimateNumber  String // "MTO-0001" (was "EST-0001" before the Sept 2026 workflow change)
+  name            String
+  status          String         @default("DRAFT") // see MtoStatus values in src/lib/mtoStatus.ts
+  projectId       String
+  createdById     String
+  data            Json
+  clientUpdatedAt BigInt // the app's updatedAt (ms) — used for last-write-wins
+  submittedAt     DateTime?
+  closedAt        DateTime?
+  updatedAt       DateTime       @updatedAt
+  createdAt       DateTime       @default(now())
+  deletedAt       DateTime?
+  company         Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project         Project        @relation(fields: [projectId], references: [id])
+  lines           EstimateLine[]
+  events          MtoEvent[]
 
   @@id([companyId, id])
   @@index([companyId, createdById])
+  @@index([companyId, projectId])
+  @@index([companyId, status])
+}
+
+// Audit trail for every status move an MTO makes — who, when, from/to, and any comment
+// (required by the API for Reject / Send back / Cancel). Shown as the History tab.
+model MtoEvent {
+  id         String   @id @default(cuid())
+  companyId  String
+  estimateId String
+  actorId    String
+  actorName  String   @default("")
+  fromStatus String?
+  toStatus   String?
+  action     String // "transition" | "created" | ... (room for procurement/dispatch actions later)
+  comment    String?
+  createdAt  DateTime @default(now())
+  estimate   Estimate @relation(fields: [companyId, estimateId], references: [companyId, id], onDelete: Cascade)
+
+  @@index([companyId, estimateId, createdAt])
 }
 
 // One row per estimate line that draws on stock (i.e. not in a released status like Rejected).
@@ -143,7 +198,7 @@ model EstimateLine {
 
 model StockLine {
   companyId     String
-  key           String   // stockKey(): trade|item|material|size|secondarySize|core
+  key           String // stockKey(): trade|item|material|size|secondarySize|core
   trade         String
   family        String   @default("")
   item          String
@@ -164,7 +219,7 @@ model StockLine {
 // Company-specific rates. Anything not here falls back to the default rates in packages/shared.
 model RateOverride {
   companyId    String
-  key          String   // rateKey(): trade::family::item::material
+  key          String // rateKey(): trade::family::item::material
   materialRate Decimal  @db.Decimal(14, 2)
   labourRate   Decimal  @db.Decimal(14, 2)
   updatedAt    DateTime @updatedAt
