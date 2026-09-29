@@ -7,10 +7,10 @@ import { T } from "./Text";
 import { Icon } from "./Icon";
 import { Fab } from "./Button";
 
-// Bottom tab bar: Inbox · MTOs · (+ FAB) · Library · Settings.
+// Bottom tab bar: Inbox · MTOs · (+ FAB) · Projects · Library · Settings.
 // Active tab: Blue 700 label on a Blue-500-tint pill. Works as a React Navigation tabBar.
 // Route names stay as they were (Home, Estimates, …) — only the label shown here changed.
-export const TAB_ICONS = { Home: "home", Estimates: "fileText", Library: "layers", Settings: "settings" };
+export const TAB_ICONS = { Home: "home", Estimates: "fileText", Projects: "building", Library: "layers", Settings: "settings" };
 export const TAB_LABELS = { Home: "Inbox", Estimates: "MTOs" };
 
 export function TabBar({ state, navigation, onFab }) {

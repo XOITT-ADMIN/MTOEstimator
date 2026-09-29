@@ -122,6 +122,7 @@ model Project {
   updatedAt   DateTime      @updatedAt
   company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   estimates   Estimate[]
+  consumptions ConsumptionEntry[]
 
   @@unique([companyId, name])
   @@index([companyId, status])
@@ -262,6 +263,31 @@ model Dispatch {
   estimate     Estimate  @relation(fields: [companyId, estimateId], references: [companyId, id], onDelete: Cascade)
 
   @@index([companyId, estimateId])
+}
+
+enum ConsumptionKind {
+  USED   // material installed or consumed in work
+  WASTED // material scrapped or broken — not returned to stock on close
+}
+
+// Daily site use log, recorded by site_supervisor as materials are consumed.
+// Site balance per stockKey = sum(issuedQty from DELIVERED/IN_USE/CLOSED MTOs) − USED − WASTED.
+// Project close returns balance (not wasted) to stock.
+model ConsumptionEntry {
+  id          String          @id @default(cuid())
+  companyId   String
+  projectId   String
+  stockKey    String          // matches StockLine.key
+  qty         Decimal         @db.Decimal(14, 2)
+  kind        ConsumptionKind
+  entryDate   DateTime        // the calendar date (midnight UTC)
+  note        String?
+  createdById String
+  createdAt   DateTime        @default(now())
+  project     Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, projectId, entryDate])
+  @@index([companyId, projectId, stockKey])
 }
 
 // Company-specific rates. Anything not here falls back to the default rates in packages/shared.

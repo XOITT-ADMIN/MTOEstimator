@@ -64,12 +64,48 @@ export function ProjectsProvider({ children }) {
     [refresh]
   );
 
+  const closeProject = useCallback(
+    async (id) => {
+      const result = await api("POST", `/projects/${encodeURIComponent(id)}/close`);
+      await refresh();
+      return result;
+    },
+    [refresh]
+  );
+
+  const getSiteBalance = useCallback(
+    async (id) => {
+      return api("GET", `/projects/${encodeURIComponent(id)}/site-balance`);
+    },
+    []
+  );
+
+  const addConsumption = useCallback(
+    async (id, { date, entries }) => {
+      const result = await api("POST", `/projects/${encodeURIComponent(id)}/consumption`, { date, entries });
+      return result;
+    },
+    []
+  );
+
+  const getConsumption = useCallback(
+    async (id, { from, to } = {}) => {
+      const params = new URLSearchParams();
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      const qs = params.toString();
+      const suffix = qs ? "?" + qs : "";
+      return api("GET", `/projects/${encodeURIComponent(id)}/consumption${suffix}`);
+    },
+    []
+  );
+
   const openProjects = useMemo(() => projects.filter((p) => p.status === "open"), [projects]);
   const getProject = useCallback((id) => projects.find((p) => p.id === id) || null, [projects]);
 
   const value = useMemo(
-    () => ({ projects, openProjects, loaded, error, refresh, create, rename, getProject }),
-    [projects, openProjects, loaded, error, refresh, create, rename, getProject]
+    () => ({ projects, openProjects, loaded, error, refresh, create, rename, getProject, closeProject, getSiteBalance, addConsumption, getConsumption }),
+    [projects, openProjects, loaded, error, refresh, create, rename, getProject, closeProject, getSiteBalance, addConsumption, getConsumption]
   );
 
   return <ProjectsContext.Provider value={value}>{children}</ProjectsContext.Provider>;

@@ -11,6 +11,8 @@ import LoginScreen from "../screens/LoginScreen";
 import CompanySetupScreen from "../screens/CompanySetupScreen";
 import HomeScreen from "../screens/HomeScreen";
 import EstimatesScreen from "../screens/EstimatesScreen";
+import ProjectsScreen from "../screens/ProjectsScreen";
+import ProjectDetailScreen from "../screens/ProjectDetailScreen";
 import LibraryScreen from "../screens/LibraryScreen";
 import SettingsScreen from "../screens/SettingsScreen";
 import EstimateDetailScreen from "../screens/EstimateDetailScreen";
@@ -22,8 +24,8 @@ import TeamScreen from "../screens/TeamScreen";
 // Screen map:
 //   signed out      → Splash → Login
 //   no company yet  → CompanySetup
-//   signed in       → Tabs (Home · Estimates · + · Library · Settings)
-//                     + EstimateDetail, Team (pushed) and NewEstimate, AddItem, PdfPreview (modal sheets)
+//   signed in       → Tabs (Home · Estimates · + · Projects · Library · Settings)
+//                     + EstimateDetail, ProjectDetail, Team (pushed) and NewEstimate, AddItem, PdfPreview (modal sheets)
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -35,6 +37,7 @@ function Tabs({ navigation }) {
     <Tab.Navigator screenOptions={{ headerShown: false }} tabBar={(props) => <TabBar {...props} onFab={() => navigation.navigate("NewEstimate")} />}>
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Estimates" component={EstimatesScreen} />
+      <Tab.Screen name="Projects" component={ProjectsScreen} />
       <Tab.Screen name="Library" component={LibraryScreen} />
       <Tab.Screen name="Settings" component={SettingsScreen} />
     </Tab.Navigator>
@@ -61,6 +64,7 @@ export default function RootNavigator() {
           <>
             <Stack.Screen name="Tabs" component={Tabs} />
             <Stack.Screen name="EstimateDetail" component={EstimateDetailScreen} />
+            <Stack.Screen name="ProjectDetail" component={ProjectDetailScreen} />
             <Stack.Screen name="Team" component={TeamScreen} />
             <Stack.Screen name="NewEstimate" component={NewEstimateScreen} options={sheet} />
             <Stack.Screen name="AddItem" component={AddItemScreen} options={sheet} />
