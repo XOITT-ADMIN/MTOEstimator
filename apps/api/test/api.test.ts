@@ -518,3 +518,109 @@ describe("procurement + stock ledger (Phase 3)", () => {
     assert.ok(hist.json.some((h: J) => h.to === "READY_TO_DISPATCH"));
   });
 });
+
+describe("logistics + cancel (Phase 4)", () => {
+  let logistics: string;
+  let projectId: string;
+  let stockBefore: number;
+
+  before(async () => {
+    await call("POST", "/invites", owner, { email: "logi@test.dev", name: "Laxmi", roles: ["logistics"] });
+    logistics = await signIn("logi@test.dev", "Laxmi");
+    await call("GET", "/me", logistics); // accept invite
+
+    projectId = (await call("GET", "/projects", owner)).json.find((p: J) => p.name === "Whitefield Tower").id;
+    stockBefore = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+  });
+
+  test("logistics moves READY_TO_DISPATCH → DISPATCHED via dispatch sheet", async () => {
+    // e1-d is READY_TO_DISPATCH from procurement tests
+    const dispatchR = await call("POST", "/mtos/e1-d/dispatch", logistics, {
+      loadingCheck: true,
+      loadingCost: 500,
+      vehicle: "KA 01 AB 1234",
+      driver: "Ramesh",
+    });
+    assert.equal(dispatchR.status, 200, JSON.stringify(dispatchR.json));
+    assert.equal(dispatchR.json.dispatch.loadingCheck, true);
+
+    const transR = await call("POST", "/mtos/e1-d/transition", logistics, { to: "DISPATCHED" });
+    assert.equal(transR.status, 200, JSON.stringify(transR.json));
+    assert.equal(transR.json.item.status, "DISPATCHED");
+  });
+
+  test("dispatch endpoint refused on wrong status", async () => {
+    // e1-a is BUDGET_OK — not READY_TO_DISPATCH
+    const r = await call("POST", "/mtos/e1-a/dispatch", logistics, {});
+    assert.equal(r.status, 400);
+    assert.match(r.json.error, /Ready-to-dispatch/);
+  });
+
+  test("DISPATCHED → DELIVERED (logistics or supervisor)", async () => {
+    // Supervisor can also mark delivered
+    const r = await call("POST", "/mtos/e1-d/transition", eng1, { to: "DELIVERED" });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.item.status, "DELIVERED");
+  });
+
+  test("cancel after delivery returns all issued qty to stock immediately", async () => {
+    const stockMid = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+
+    // PM cancels the delivered MTO — should RETURN all issued qty (10 m for e1-d)
+    const cancel = await call("POST", "/mtos/e1-d/transition", pm, { to: "CANCELLED", comment: "Site plan changed." });
+    assert.equal(cancel.status, 200, JSON.stringify(cancel.json));
+    assert.equal(cancel.json.item.status, "CANCELLED");
+
+    const stockAfter = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+    assert.equal(stockAfter, stockMid + 10, `Expected stock +10, got ${stockAfter - stockMid}`);
+
+    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}`, owner);
+    assert.ok(movements.json.some((mv: J) => mv.type === "RETURN" && mv.estimateId === "e1-d"));
+  });
+
+  test("cancel with no comment is refused", async () => {
+    // create a fresh MTO, push it to Approved, then try to cancel without comment
+    await call("POST", "/sync/estimates", eng1, { upserts: [estimate("e1-e", projectId, 1)] });
+    await call("POST", "/mtos/e1-e/transition", eng1, { to: "SUBMITTED" });
+    await call("POST", "/mtos/e1-e/transition", pm, { to: "APPROVED" });
+
+    const r = await call("POST", "/mtos/e1-e/transition", pm, { to: "CANCELLED" });
+    assert.equal(r.status, 400);
+    assert.match(r.json.error, /comment/);
+  });
+
+  test("cancel at APPROVED (no stock issued) makes no RETURN movements", async () => {
+    const stockSnapshot = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+
+    const cancel = await call("POST", "/mtos/e1-e/transition", pm, { to: "CANCELLED", comment: "Not needed." });
+    assert.equal(cancel.status, 200);
+
+    const stockAfter = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+    assert.equal(stockAfter, stockSnapshot); // no change
+  });
+
+  test("dispatch record can be patched and fetched", async () => {
+    // Create a fresh MTO, push to ready-to-dispatch, create dispatch record
+    await call("POST", "/sync/estimates", eng1, { upserts: [estimate("e1-f", projectId, 2)] });
+    await call("POST", "/mtos/e1-f/transition", eng1, { to: "SUBMITTED" });
+    await call("POST", "/mtos/e1-f/transition", pm, { to: "APPROVED" });
+    await call("POST", "/mtos/e1-f/transition", finance, { to: "BUDGET_OK" });
+
+    // Get procurement token (reuse owner who has procurement role)
+    const procOwner = owner;
+    await call("POST", "/mtos/e1-f/procurement", procOwner, { lines: [{ lineId: "e1-f-l1", issueQty: 2, purchaseQty: 0 }] });
+    await call("POST", "/mtos/e1-f/transition", procOwner, { to: "READY_TO_DISPATCH" });
+
+    const dispR = await call("POST", "/mtos/e1-f/dispatch", logistics, { vehicle: "KA 02 CD 5678", loadingCheck: false });
+    assert.equal(dispR.status, 200);
+    const dispId = dispR.json.dispatch.id;
+
+    const patch = await call("PATCH", `/dispatches/${dispId}`, logistics, { dispatched: true });
+    assert.equal(patch.status, 200);
+    assert.ok(patch.json.dispatch.dispatchedAt != null);
+
+    const list = await call("GET", "/mtos/e1-f/dispatches", owner);
+    assert.equal(list.status, 200);
+    assert.ok(list.json.some((d: J) => d.id === dispId));
+  });
+});

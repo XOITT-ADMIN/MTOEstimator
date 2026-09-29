@@ -6,6 +6,7 @@ import { badRequest, conflict, forbidden, notFound } from "../lib/errors.js";
 import { canPerform, findTransition, isMtoStatus, NOTIFY_ON_REACH, statusesWaitingOnRoles, STATUSES_WAITING_ON_CREATOR } from "../lib/mtoStatus.js";
 import { toNum } from "../lib/num.js";
 import type { Deps } from "../app.js";
+import type { Prisma } from "../db.js";
 
 const transitionSchema = z.object({
   to: z.string().min(1).max(40),
@@ -20,6 +21,18 @@ const procurementSchema = z.object({
       purchaseQty: z.number().min(0),
     })
   ).min(1),
+});
+
+const dispatchSchema = z.object({
+  loadingCheck: z.boolean().optional().default(false),
+  loadingCost:  z.number().min(0).optional().default(0),
+  vehicle:      z.string().trim().max(120).optional().default(""),
+  driver:       z.string().trim().max(120).optional().default(""),
+  notes:        z.string().trim().max(2000).optional().default(""),
+});
+
+const deliverSchema = z.object({
+  dispatchId: z.string().min(1),
 });
 
 export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps) {
@@ -110,6 +123,32 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
         }
       }
 
+      // Phase 4: Cancel — return all issued qty to stock immediately (confirmed by Suraj 29 Sep 2026)
+      if (body.to === "CANCELLED") {
+        const lines = await tx.estimateLine.findMany({
+          where: { companyId: m.companyId, estimateId: id },
+          select: { lineId: true, stockKey: true, issuedQty: true },
+        });
+        for (const line of lines) {
+          const issued = toNum(line.issuedQty);
+          if (issued <= 0) continue;
+          await tx.$executeRaw`
+            UPDATE "StockLine" SET "onHand" = "onHand" + ${issued}
+            WHERE "companyId" = ${m.companyId} AND "key" = ${line.stockKey}`;
+          await tx.stockMovement.create({
+            data: {
+              companyId:   m.companyId,
+              stockLineId: line.stockKey,
+              type:        "RETURN",
+              qty:         issued,
+              estimateId:  id,
+              reason:      `MTO cancelled: ${body.comment}`,
+              createdById: m.userId,
+            },
+          });
+        }
+      }
+
       const now = new Date();
       const nextData = { ...(row.data as Record<string, unknown>), status: body.to };
       await tx.estimate.update({
@@ -117,8 +156,9 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
         data: {
           status: body.to,
           data: nextData,
-          ...(body.to === "SUBMITTED" ? { submittedAt: now } : {}),
-          ...(body.to === "CLOSED"    ? { closedAt:    now } : {}),
+          ...(body.to === "SUBMITTED"  ? { submittedAt: now } : {}),
+          ...(body.to === "CLOSED"     ? { closedAt:    now } : {}),
+          ...(body.to === "CANCELLED"  ? { closedAt:    now } : {}),
         },
       });
       await tx.mtoEvent.create({
@@ -137,17 +177,14 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
     });
 
     hub.publish(m.companyId, "estimates", { by: m.userId });
+    if (body.to === "CANCELLED") hub.publish(m.companyId, "stock", { by: m.userId });
 
-    // Phase 2: fire-and-forget email to relevant roles. Never blocks the response.
     sendTransitionEmail({ db, mailer, companyId: m.companyId, estimateId: id, toStatus: body.to, actorName: m.name, comment: body.comment, createdById: result.createdById, mtoData: result.nextData }).catch(() => {});
 
     return { item: result.nextData };
   });
 
   // Phase 3: Procurement records how much to issue from stock and how much to buy externally.
-  // Issues deduct from StockLine.onHand immediately (with a FOR UPDATE lock). Purchases are
-  // recorded as "to buy" (purchasedQty on the line) — the actual stock receipt comes later via
-  // POST /stock/receipts, which adds back to stock before the next issue step.
   app.post<{ Params: { id: string } }>("/mtos/:id/procurement", auth, async (req) => {
     const m = await requireMember(db, req);
     if (!m.roles.includes("procurement") && !m.roles.includes("owner") && !m.roles.includes("admin")) {
@@ -156,7 +193,6 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
     const body = procurementSchema.parse(req.body);
     const { id } = req.params;
 
-    // Verify MTO belongs to this company and is in a procurable status
     const mto = await db.estimate.findUnique({
       where: { companyId_id: { companyId: m.companyId, id } },
       select: { status: true, deletedAt: true },
@@ -178,7 +214,6 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
         if (!line) throw notFound(`Line "${entry.lineId}" not found.`);
 
         if (entry.issueQty > 0) {
-          // Lock the stock line and check availability
           const stockRows = await tx.$queryRaw<{ key: string; onHand: string }[]>`
             SELECT "key", "onHand" FROM "StockLine"
             WHERE "companyId" = ${m.companyId} AND "key" = ${line.stockKey} FOR UPDATE`;
@@ -215,8 +250,8 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
         });
 
         results.push({
-          lineId:      entry.lineId,
-          issuedQty:   toNum(line.issuedQty) + entry.issueQty,
+          lineId:       entry.lineId,
+          issuedQty:    toNum(line.issuedQty) + entry.issueQty,
           purchasedQty: toNum(line.purchasedQty) + entry.purchaseQty,
         });
       }
@@ -228,6 +263,132 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
     hub.publish(m.companyId, "estimates", { by: m.userId });
     return { lines: updatedLines };
   });
+
+  // Phase 4: Create the dispatch record for a Ready-to-dispatch MTO (loading details, transport).
+  app.post<{ Params: { id: string } }>("/mtos/:id/dispatch", auth, async (req) => {
+    const m = await requireMember(db, req);
+    if (!m.roles.includes("logistics") && !m.roles.includes("owner") && !m.roles.includes("admin")) {
+      throw forbidden("Only Logistics, Admin or Owner can create a dispatch record.");
+    }
+    const body = dispatchSchema.parse(req.body);
+    const { id } = req.params;
+
+    const mto = await db.estimate.findUnique({
+      where: { companyId_id: { companyId: m.companyId, id } },
+      select: { status: true, deletedAt: true },
+    });
+    if (!mto || mto.deletedAt) throw notFound("MTO not found.");
+    if (mto.status !== "READY_TO_DISPATCH") {
+      throw badRequest(`Dispatch can only be created for a Ready-to-dispatch MTO (this one is "${mto.status}").`);
+    }
+
+    const dispatch = await db.dispatch.create({
+      data: {
+        companyId:    m.companyId,
+        estimateId:   id,
+        loadingCheck: body.loadingCheck,
+        loadingCost:  body.loadingCost,
+        vehicle:      body.vehicle || null,
+        driver:       body.driver || null,
+        notes:        body.notes || null,
+        createdById:  m.userId,
+      },
+    });
+
+    hub.publish(m.companyId, "estimates", { by: m.userId });
+    return { dispatch: viewDispatch(dispatch) };
+  });
+
+  // Phase 4: Update a dispatch record (mark dispatched or delivered).
+  app.patch<{ Params: { dispatchId: string } }>("/dispatches/:dispatchId", auth, async (req) => {
+    const m = await requireMember(db, req);
+    const isLogisticsOrSupervisor = m.roles.includes("logistics") || m.roles.includes("site_supervisor") || m.roles.includes("owner") || m.roles.includes("admin");
+    if (!isLogisticsOrSupervisor) throw forbidden("Only Logistics, Site Supervisor, Admin or Owner can update a dispatch.");
+
+    const body = z.object({
+      loadingCheck: z.boolean().optional(),
+      loadingCost:  z.number().min(0).optional(),
+      vehicle:      z.string().trim().max(120).optional(),
+      driver:       z.string().trim().max(120).optional(),
+      notes:        z.string().trim().max(2000).optional(),
+      dispatched:   z.boolean().optional(),
+      delivered:    z.boolean().optional(),
+    }).parse(req.body);
+
+    const dispatch = await db.dispatch.findUnique({ where: { id: req.params.dispatchId } });
+    if (!dispatch || dispatch.companyId !== m.companyId) throw notFound("Dispatch not found.");
+
+    const now = new Date();
+    const updated = await db.dispatch.update({
+      where: { id: dispatch.id },
+      data: {
+        ...(body.loadingCheck !== undefined ? { loadingCheck: body.loadingCheck } : {}),
+        ...(body.loadingCost  !== undefined ? { loadingCost:  body.loadingCost  } : {}),
+        ...(body.vehicle      !== undefined ? { vehicle:      body.vehicle || null } : {}),
+        ...(body.driver       !== undefined ? { driver:       body.driver  || null } : {}),
+        ...(body.notes        !== undefined ? { notes:        body.notes   || null } : {}),
+        ...(body.dispatched   ? { dispatchedAt: now } : {}),
+        ...(body.delivered    ? { deliveredAt:  now } : {}),
+      },
+    });
+
+    // Marking delivered also advances the MTO to DELIVERED via the state machine
+    if (body.delivered && !dispatch.deliveredAt) {
+      const mto = await db.estimate.findUnique({
+        where: { companyId_id: { companyId: m.companyId, id: dispatch.estimateId } },
+        select: { status: true, data: true, createdById: true },
+      });
+      if (mto && mto.status === "DISPATCHED") {
+        const nextData = { ...(mto.data as Record<string, unknown>), status: "DELIVERED" };
+        await db.estimate.update({
+          where: { companyId_id: { companyId: m.companyId, id: dispatch.estimateId } },
+          data: { status: "DELIVERED", data: nextData },
+        });
+        await db.mtoEvent.create({
+          data: {
+            companyId:  m.companyId,
+            estimateId: dispatch.estimateId,
+            actorId:    m.userId,
+            actorName:  m.name,
+            fromStatus: "DISPATCHED",
+            toStatus:   "DELIVERED",
+            action:     "transition",
+          },
+        });
+        sendTransitionEmail({ db, mailer, companyId: m.companyId, estimateId: dispatch.estimateId, toStatus: "DELIVERED", actorName: m.name, comment: "", createdById: mto.createdById, mtoData: nextData }).catch(() => {});
+      }
+    }
+
+    hub.publish(m.companyId, "estimates", { by: m.userId });
+    return { dispatch: viewDispatch(updated) };
+  });
+
+  // Get dispatch records for an MTO
+  app.get<{ Params: { id: string } }>("/mtos/:id/dispatches", auth, async (req) => {
+    const m = await requireMember(db, req);
+    const exists = await db.estimate.findUnique({ where: { companyId_id: { companyId: m.companyId, id: req.params.id } }, select: { id: true } });
+    if (!exists) throw notFound("MTO not found.");
+    const dispatches = await db.dispatch.findMany({
+      where: { companyId: m.companyId, estimateId: req.params.id },
+      orderBy: { createdAt: "asc" },
+    });
+    return dispatches.map(viewDispatch);
+  });
+}
+
+function viewDispatch(d: { id: string; loadingCheck: boolean; loadingCost: Prisma.Decimal; vehicle: string | null; driver: string | null; notes: string | null; dispatchedAt: Date | null; deliveredAt: Date | null; createdById: string; createdAt: Date }) {
+  return {
+    id:           d.id,
+    loadingCheck: d.loadingCheck,
+    loadingCost:  toNum(d.loadingCost),
+    vehicle:      d.vehicle ?? "",
+    driver:       d.driver  ?? "",
+    notes:        d.notes   ?? "",
+    dispatchedAt: d.dispatchedAt?.getTime() ?? null,
+    deliveredAt:  d.deliveredAt?.getTime()  ?? null,
+    createdById:  d.createdById,
+    createdAt:    d.createdAt.getTime(),
+  };
 }
 
 // Phase 2: resolve who to email and send it. Runs outside the transaction.
@@ -250,10 +411,7 @@ async function sendTransitionEmail({ db, mailer, companyId, estimateId, toStatus
   const number = data.estimateNumber as string || estimateId;
   const name   = data.name as string || "";
 
-  const members = await db.membership.findMany({
-    where: { companyId },
-    include: { user: true },
-  });
+  const members = await db.membership.findMany({ where: { companyId }, include: { user: true } });
 
   const recipients = new Set<string>();
   for (const target of notify) {

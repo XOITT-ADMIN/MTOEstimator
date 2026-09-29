@@ -18,18 +18,30 @@ export const MTO_STATUSES = [
   "CANCELLED",
 ];
 
-// Phase 1 approval loop + Phase 3 procurement trigger. Cancel and logistics moves Phase 4.
+// Full workflow: approval (Phase 1), procurement (Phase 3), logistics + cancel (Phase 4).
 export const TRANSITIONS = [
-  { from: "DRAFT",     to: "SUBMITTED",         roles: ["site_supervisor"], requireOwnMto: true, label: "Submit" },
-  { from: "SUBMITTED", to: "APPROVED",           roles: ["project_manager"], label: "Approve" },
-  { from: "SUBMITTED", to: "REJECTED",           roles: ["project_manager"], commentRequired: true, label: "Reject", tone: "danger" },
-  { from: "REJECTED",  to: "SUBMITTED",          roles: ["site_supervisor"], requireOwnMto: true, label: "Resubmit" },
-  { from: "APPROVED",  to: "BUDGET_OK",          roles: ["finance"], label: "Mark budget OK" },
-  { from: "APPROVED",  to: "SENT_BACK",          roles: ["finance"], commentRequired: true, label: "Send back", tone: "danger" },
-  { from: "SENT_BACK", to: "APPROVED",           roles: ["project_manager"], label: "Re-approve" },
-  { from: "SENT_BACK", to: "REJECTED",           roles: ["project_manager"], commentRequired: true, label: "Reject", tone: "danger" },
-  // Phase 3: Procurement moves to Ready to dispatch once all lines are issued
-  { from: "BUDGET_OK", to: "READY_TO_DISPATCH",  roles: ["procurement"], label: "Mark ready to dispatch" },
+  // Approval loop
+  { from: "DRAFT",             to: "SUBMITTED",        roles: ["site_supervisor"], requireOwnMto: true, label: "Submit" },
+  { from: "SUBMITTED",         to: "APPROVED",         roles: ["project_manager"], label: "Approve" },
+  { from: "SUBMITTED",         to: "REJECTED",         roles: ["project_manager"], commentRequired: true, label: "Reject", tone: "danger" },
+  { from: "REJECTED",          to: "SUBMITTED",        roles: ["site_supervisor"], requireOwnMto: true, label: "Resubmit" },
+  { from: "APPROVED",          to: "BUDGET_OK",        roles: ["finance"], label: "Mark budget OK" },
+  { from: "APPROVED",          to: "SENT_BACK",        roles: ["finance"], commentRequired: true, label: "Send back", tone: "danger" },
+  { from: "SENT_BACK",         to: "APPROVED",         roles: ["project_manager"], label: "Re-approve" },
+  { from: "SENT_BACK",         to: "REJECTED",         roles: ["project_manager"], commentRequired: true, label: "Reject", tone: "danger" },
+  // Phase 3: procurement
+  { from: "BUDGET_OK",         to: "READY_TO_DISPATCH",roles: ["procurement"], label: "Mark ready to dispatch" },
+  // Phase 4: logistics
+  { from: "READY_TO_DISPATCH", to: "DISPATCHED",       roles: ["logistics"], label: "Mark dispatched" },
+  { from: "DISPATCHED",        to: "DELIVERED",        roles: ["logistics", "site_supervisor"], label: "Mark delivered" },
+  // Phase 4: cancel (PM or Admin; comment required)
+  { from: "APPROVED",          to: "CANCELLED",        roles: ["project_manager"], commentRequired: true, label: "Cancel", tone: "danger" },
+  { from: "BUDGET_OK",         to: "CANCELLED",        roles: ["project_manager"], commentRequired: true, label: "Cancel", tone: "danger" },
+  { from: "SENT_BACK",         to: "CANCELLED",        roles: ["project_manager"], commentRequired: true, label: "Cancel", tone: "danger" },
+  { from: "READY_TO_DISPATCH", to: "CANCELLED",        roles: ["project_manager"], commentRequired: true, label: "Cancel", tone: "danger" },
+  { from: "DISPATCHED",        to: "CANCELLED",        roles: ["project_manager"], commentRequired: true, label: "Cancel", tone: "danger" },
+  { from: "DELIVERED",         to: "CANCELLED",        roles: ["project_manager"], commentRequired: true, label: "Cancel", tone: "danger" },
+  { from: "IN_USE",            to: "CANCELLED",        roles: ["project_manager"], commentRequired: true, label: "Cancel", tone: "danger" },
 ];
 
 // A member's roles, expanded the way the brief's role table describes: Owner can do anything;

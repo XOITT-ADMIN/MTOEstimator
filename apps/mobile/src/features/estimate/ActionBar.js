@@ -3,16 +3,20 @@ import { View, ScrollView } from "react-native";
 
 import { Button, Sheet, Field, T, colors } from "../../ui";
 import { availableTransitions } from "../mto/mtoStatus";
+import { DispatchSheet, DeliverSheet } from "./DispatchSheet";
 import { confirmAction, notify } from "../../utils/confirm";
 
 // The row of "what can I do to this MTO right now" buttons — Submit, Approve, Reject, Mark
-// budget OK, Send back, … — computed from its status and the signed-in person's roles (see
-// src/features/mto/mtoStatus.js). Nothing here is the final word: the server re-checks every
-// move and this just surfaces whatever it says. `onTransition(to, comment)` does the API call.
-export function ActionBar({ estimate, roles, isOwnMto, onTransition }) {
-  const [pending, setPending] = useState(null); // the action awaiting a required comment
-  const [comment, setComment] = useState("");
-  const [busy, setBusy] = useState(false);
+// budget OK, Send back, Dispatch, Deliver, Cancel, … — computed from the MTO's status and the
+// signed-in person's roles. Nothing here is the final word: the server re-checks every move.
+// `onTransition(to, comment)` does the API call; special actions (dispatch/deliver) open their
+// own sheets that handle the API calls themselves.
+export function ActionBar({ estimate, roles, isOwnMto, onTransition, dispatches = [] }) {
+  const [pending, setPending]           = useState(null); // action waiting for a comment
+  const [comment, setComment]           = useState("");
+  const [busy, setBusy]                 = useState(false);
+  const [dispatchOpen, setDispatchOpen] = useState(false);
+  const [deliverOpen, setDeliverOpen]   = useState(false);
 
   const actions = availableTransitions(estimate.status, roles, { isOwnMto });
   if (!actions.length) return null;
@@ -32,6 +36,9 @@ export function ActionBar({ estimate, roles, isOwnMto, onTransition }) {
 
   async function tap(action) {
     if (busy) return;
+    // Dispatch and Deliver open their own sheets
+    if (action.to === "DISPATCHED") { setDispatchOpen(true); return; }
+    if (action.to === "DELIVERED")  { setDeliverOpen(true);  return; }
     if (action.commentRequired) {
       setComment("");
       setPending(action);
@@ -49,6 +56,8 @@ export function ActionBar({ estimate, roles, isOwnMto, onTransition }) {
           <Button key={a.to} title={a.label} tone={a.tone === "danger" ? "dangerSolid" : "primary"} compact compactText disabled={busy} onPress={() => tap(a)} style={{ paddingHorizontal: 18 }} />
         ))}
       </ScrollView>
+
+      {/* Comment sheet for Reject / Send back / Cancel */}
       <Sheet visible={!!pending} title={pending?.label} subtitle={`${estimate.estimateNumber} · ${estimate.name}`} onClose={() => setPending(null)} footer={<Button title={pending?.label || "Confirm"} tone={pending?.tone === "danger" ? "dangerSolid" : "primary"} disabled={!comment.trim() || busy} loading={busy} onPress={() => run(pending, comment)} />}>
         <View style={{ paddingHorizontal: 20, paddingTop: 4, paddingBottom: 16 }}>
           <Field label="Comment" value={comment} onChangeText={setComment} placeholder="Say why, so the team has the full trail" multiline autoFocus style={{ minHeight: 96 }} />
@@ -57,6 +66,25 @@ export function ActionBar({ estimate, roles, isOwnMto, onTransition }) {
           </T>
         </View>
       </Sheet>
+
+      {/* Phase 4: Dispatch sheet */}
+      {dispatchOpen ? (
+        <DispatchSheet
+          estimate={estimate}
+          onClose={() => setDispatchOpen(false)}
+          onDispatched={() => onTransition("DISPATCHED", "")}
+        />
+      ) : null}
+
+      {/* Phase 4: Deliver sheet */}
+      {deliverOpen ? (
+        <DeliverSheet
+          estimate={estimate}
+          dispatches={dispatches}
+          onClose={() => setDeliverOpen(false)}
+          onDelivered={() => onTransition("DELIVERED", "")}
+        />
+      ) : null}
     </>
   );
 }

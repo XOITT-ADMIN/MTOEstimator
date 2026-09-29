@@ -36,19 +36,30 @@ export interface TransitionRule {
   requireOwnMto?: boolean; // the caller must have created the MTO, unless they're owner/admin
 }
 
-// Approval loop (Phase 1) + procurement trigger (Phase 3). Cancel and logistics moves Phase 4.
+// Full workflow: approval loop (Phase 1), procurement (Phase 3), logistics + cancel (Phase 4).
 export const TRANSITIONS: TransitionRule[] = [
-  { from: "DRAFT",     to: "SUBMITTED",        roles: ["site_supervisor"], requireOwnMto: true },
-  { from: "SUBMITTED", to: "APPROVED",          roles: ["project_manager"] },
-  { from: "SUBMITTED", to: "REJECTED",          roles: ["project_manager"], commentRequired: true },
-  { from: "REJECTED",  to: "SUBMITTED",         roles: ["site_supervisor"], requireOwnMto: true },
-  { from: "APPROVED",  to: "BUDGET_OK",         roles: ["finance"] },
-  { from: "APPROVED",  to: "SENT_BACK",         roles: ["finance"], commentRequired: true },
-  { from: "SENT_BACK", to: "APPROVED",          roles: ["project_manager"] },
-  { from: "SENT_BACK", to: "REJECTED",          roles: ["project_manager"], commentRequired: true },
-  // Phase 3: Procurement marks "Ready to dispatch" once every line is fully issued.
-  // The endpoint enforces that guard; the transition rule records who can trigger it.
-  { from: "BUDGET_OK", to: "READY_TO_DISPATCH", roles: ["procurement"] },
+  // Approval loop
+  { from: "DRAFT",              to: "SUBMITTED",         roles: ["site_supervisor"], requireOwnMto: true },
+  { from: "SUBMITTED",          to: "APPROVED",          roles: ["project_manager"] },
+  { from: "SUBMITTED",          to: "REJECTED",          roles: ["project_manager"], commentRequired: true },
+  { from: "REJECTED",           to: "SUBMITTED",         roles: ["site_supervisor"], requireOwnMto: true },
+  { from: "APPROVED",           to: "BUDGET_OK",         roles: ["finance"] },
+  { from: "APPROVED",           to: "SENT_BACK",         roles: ["finance"], commentRequired: true },
+  { from: "SENT_BACK",          to: "APPROVED",          roles: ["project_manager"] },
+  { from: "SENT_BACK",          to: "REJECTED",          roles: ["project_manager"], commentRequired: true },
+  // Phase 3: procurement
+  { from: "BUDGET_OK",          to: "READY_TO_DISPATCH", roles: ["procurement"] },
+  // Phase 4: logistics
+  { from: "READY_TO_DISPATCH",  to: "DISPATCHED",        roles: ["logistics"] },
+  { from: "DISPATCHED",         to: "DELIVERED",         roles: ["logistics", "site_supervisor"] },
+  // Phase 4: cancel (PM or Admin; comment always required; stock return happens in the endpoint)
+  { from: "APPROVED",           to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
+  { from: "BUDGET_OK",          to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
+  { from: "SENT_BACK",          to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
+  { from: "READY_TO_DISPATCH",  to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
+  { from: "DISPATCHED",         to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
+  { from: "DELIVERED",          to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
+  { from: "IN_USE",             to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
 ];
 
 // A member's roles, expanded the way the brief's role table describes: Owner can do anything;
