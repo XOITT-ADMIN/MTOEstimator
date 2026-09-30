@@ -4,17 +4,21 @@ import { View, Pressable } from "react-native";
 import { Card, Group, Chip, ChipRow, StockLine, stockLevel, EmptyState, Button, T, Icon, RowBetween, colors, radius } from "../../ui";
 import { specLabel } from "../estimates";
 import { useInventory } from "../../inventory/InventoryContext";
+import { useCompany } from "../../context/CompanyContext";
 import { parseStockCsv, StockCsvError } from "../../inventory/stockCsv";
 import { saveTextFile, pickTextFile } from "../../utils/files";
 import { confirmAction, notify } from "../../utils/confirm";
 import { LineEditorSheet, BulkSheet, AddLineSheet } from "./StockSheets";
 import { StockMovementsSheet } from "./StockMovementsSheet";
+import { PendingPurchasesSheet } from "./PendingPurchasesSheet";
 
 const UNIT_WORDS = { m: "Metres", Nos: "Nos", Set: "Sets", Kg: "Kg", L: "Litres" };
 
 // Library › Stock: health summary, actions, filters, and one card per item with its lines.
 export function StockTab({ query = "" }) {
   const { lines, updateLine, removeLine, bulkUpdate, upsertLine, exportCsv, importCsv, canEdit = true } = useInventory();
+  const { roles } = useCompany();
+  const isProcurement = roles?.some((r) => ["procurement", "owner", "admin"].includes(r));
   const [filter, setFilter] = useState("All");
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
@@ -22,6 +26,7 @@ export function StockTab({ query = "" }) {
   const [movementsLine, setMovementsLine] = useState(null); // key + label for ledger sheet
   const [bulkOpen, setBulkOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [purchasesOpen, setPurchasesOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const health = useMemo(() => {
@@ -140,6 +145,7 @@ export function StockTab({ query = "" }) {
       ) : (
         <View style={{ flexDirection: "row", gap: 8 }}>
           {canEdit ? <ActionTile icon="plus" label="Add line" onPress={() => setAddOpen(true)} /> : null}
+          {isProcurement ? <ActionTile icon="truck" label="Purchases" onPress={() => setPurchasesOpen(true)} /> : null}
           {canEdit ? <ActionTile icon="upload" label="Upload CSV" onPress={upload} disabled={busy} /> : null}
           <ActionTile icon="download" label="Download CSV" onPress={download} disabled={busy} />
           {canEdit ? <ActionTile icon="checkSquare" label="Select" onPress={() => setSelecting(true)} disabled={!lines.length} /> : null}
@@ -187,6 +193,7 @@ export function StockTab({ query = "" }) {
       {movementsLine ? <StockMovementsSheet stockLineId={movementsLine.key} lineLabel={movementsLine.label} onClose={() => setMovementsLine(null)} /> : null}
       {bulkOpen ? <BulkSheet count={selected.size} onClose={() => setBulkOpen(false)} onApply={(patch) => { bulkUpdate(Array.from(selected), patch); setBulkOpen(false); exitSelect(); }} /> : null}
       {addOpen ? <AddLineSheet onClose={() => setAddOpen(false)} onSave={(entry) => { upsertLine(entry); setAddOpen(false); }} /> : null}
+      {purchasesOpen ? <PendingPurchasesSheet onClose={() => setPurchasesOpen(false)} /> : null}
     </View>
   );
 }

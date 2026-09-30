@@ -1,3 +1,5 @@
+import { stockKey } from "@mto/shared";
+
 import { Prisma, type Db } from "../db.js";
 import { can, type Member } from "../lib/access.js";
 import { conflict, forbidden, notFound } from "../lib/errors.js";
@@ -80,6 +82,25 @@ export async function saveEstimate(db: Db, m: Member, raw: unknown): Promise<Sav
       create: { companyId: m.companyId, id: doc.id, ...row },
       update: row,
     });
+
+    // Keep EstimateLine (stockKey/qty per item) in sync with the doc's items — this is what
+    // Procurement, Ready-to-dispatch and site-balance all read from. Only reachable while the
+    // MTO is still editable, so issuedQty/purchasedQty can't have moved off zero yet.
+    const lineIds = doc.items.map((it) => it.id);
+    await tx.estimateLine.deleteMany({
+      where: { companyId: m.companyId, estimateId: doc.id, lineId: { notIn: lineIds } },
+    });
+    await Promise.all(
+      doc.items.map((it) => {
+        const key = stockKey({ trade: it.trade, item: it.item, material: it.material ?? "", size: it.size ?? "", secondarySize: it.secondarySize, core: it.core });
+        return tx.estimateLine.upsert({
+          where: { companyId_estimateId_lineId: { companyId: m.companyId, estimateId: doc.id, lineId: it.id } },
+          create: { companyId: m.companyId, estimateId: doc.id, lineId: it.id, stockKey: key, qty: it.qty },
+          update: { stockKey: key, qty: it.qty },
+        });
+      })
+    );
+
     if (isNew) {
       await tx.mtoEvent.create({
         data: { companyId: m.companyId, estimateId: doc.id, actorId: m.userId, actorName: m.name, fromStatus: null, toStatus: "DRAFT", action: "created" },

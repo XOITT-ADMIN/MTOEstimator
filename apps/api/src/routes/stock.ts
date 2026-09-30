@@ -1,3 +1,4 @@
+import { findItem } from "@mto/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
@@ -5,6 +6,13 @@ import { requireMember } from "../lib/access.js";
 import { badRequest, forbidden, notFound } from "../lib/errors.js";
 import { toNum } from "../lib/num.js";
 import type { Deps } from "../app.js";
+
+// A stockKey is trade|item|material|size|secondarySize|core (see @mto/shared's stockKey()) —
+// enough to reconstruct a StockLine's descriptive fields when one doesn't exist yet.
+function parseStockKey(key: string) {
+  const [trade, item, material, size, secondarySize, core] = key.split("|");
+  return { trade: trade || "", item: item || "", material: material || "", size: size || "", secondarySize: secondarySize || null, core: core || null };
+}
 
 const receiptsSchema = z.object({
   lines: z.array(
@@ -42,8 +50,31 @@ export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
         const stockRows = await tx.$queryRaw<{ key: string; onHand: string }[]>`
           SELECT "key", "onHand" FROM "StockLine"
           WHERE "companyId" = ${m.companyId} AND "key" = ${entry.stockLineId} FOR UPDATE`;
-        const stock = stockRows[0];
-        if (!stock) throw notFound(`Stock line "${entry.stockLineId}" not found.`);
+        let stock = stockRows[0];
+
+        // Nothing in the library under this key yet (e.g. an MTO item that was never added to
+        // stock) — a receipt is exactly the moment to create it, not a reason to refuse it.
+        if (!stock) {
+          const parsed = parseStockKey(entry.stockLineId);
+          if (!parsed.trade || !parsed.item) throw notFound(`Stock line "${entry.stockLineId}" not found.`);
+          const found = findItem(parsed.trade, parsed.item);
+          await tx.stockLine.create({
+            data: {
+              companyId: m.companyId,
+              key: entry.stockLineId,
+              trade: parsed.trade,
+              family: found?.family ?? "",
+              item: parsed.item,
+              material: parsed.material,
+              size: parsed.size,
+              secondarySize: parsed.secondarySize,
+              core: parsed.core,
+              unit: found?.unit || "Nos",
+              onHand: 0,
+            },
+          });
+          stock = { key: entry.stockLineId, onHand: "0" };
+        }
 
         await tx.$executeRaw`
           UPDATE "StockLine" SET "onHand" = "onHand" + ${entry.qty}
@@ -72,6 +103,65 @@ export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
 
     hub.publish(m.companyId, "stock", { by: m.userId });
     return { receipts: movements };
+  });
+
+  // Lines flagged "to buy" during procurement that are still short (qty not yet issued),
+  // grouped by stockKey so Procurement can see total external-purchase demand across every
+  // waiting MTO, receive it into stock once, then go issue it per MTO. See the Procurement
+  // endpoint (/mtos/:id/procurement) — purchasedQty is recorded there but never auto-received;
+  // this is the list that closes that loop.
+  app.get("/stock/pending-purchases", auth, async (req) => {
+    const m = await requireMember(db, req);
+    if (!isProcurement(m.roles)) throw forbidden("Only Procurement, Admin or Owner can see pending purchases.");
+
+    const lines = await db.estimateLine.findMany({
+      where: {
+        companyId: m.companyId,
+        purchasedQty: { gt: 0 },
+        estimate: { status: { in: ["BUDGET_OK", "READY_TO_DISPATCH"] } },
+      },
+      select: {
+        lineId: true,
+        stockKey: true,
+        qty: true,
+        issuedQty: true,
+        purchasedQty: true,
+        estimate: { select: { id: true, estimateNumber: true, name: true } },
+      },
+    });
+
+    const byKey = new Map<string, { stockKey: string; pending: number; mtos: { estimateId: string; estimateNumber: string; name: string; lineId: string; pending: number }[] }>();
+    for (const l of lines) {
+      const pending = Math.round(Math.max(0, Math.min(toNum(l.purchasedQty), toNum(l.qty) - toNum(l.issuedQty))) * 100) / 100;
+      if (pending <= 0) continue;
+      const cur = byKey.get(l.stockKey) ?? { stockKey: l.stockKey, pending: 0, mtos: [] };
+      cur.pending = Math.round((cur.pending + pending) * 100) / 100;
+      cur.mtos.push({ estimateId: l.estimate.id, estimateNumber: l.estimate.estimateNumber, name: l.estimate.name, lineId: l.lineId, pending });
+      byKey.set(l.stockKey, cur);
+    }
+
+    const keys = Array.from(byKey.keys());
+    const stockLines = keys.length
+      ? await db.stockLine.findMany({ where: { companyId: m.companyId, key: { in: keys } } })
+      : [];
+    const stockByKey = new Map(stockLines.map((s) => [s.key, s]));
+
+    return Array.from(byKey.values())
+      .map((row) => {
+        const sl = stockByKey.get(row.stockKey);
+        return {
+          stockKey: row.stockKey,
+          trade: sl?.trade ?? "",
+          item: sl?.item ?? "",
+          material: sl?.material ?? "",
+          size: sl?.size ?? "",
+          unit: sl?.unit ?? "Nos",
+          onHand: sl ? toNum(sl.onHand) : 0,
+          pending: row.pending,
+          mtos: row.mtos,
+        };
+      })
+      .sort((a, b) => b.pending - a.pending);
   });
 
   // Manual stock correction by Procurement or Admin. Reason is always required.

@@ -81,6 +81,25 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
     }));
   });
 
+  // Authoritative issued/purchased qty per line — the estimate's own `data.items` JSON is never
+  // updated by procurement (only EstimateLine is), so the Procurement tab reads this instead of
+  // trusting stale item fields after a reload.
+  app.get<{ Params: { id: string } }>("/mtos/:id/lines", auth, async (req) => {
+    const m = await requireMember(db, req);
+    const exists = await db.estimate.findUnique({ where: { companyId_id: { companyId: m.companyId, id: req.params.id } }, select: { id: true } });
+    if (!exists) throw notFound("MTO not found.");
+    const lines = await db.estimateLine.findMany({
+      where: { companyId: m.companyId, estimateId: req.params.id },
+    });
+    return lines.map((l) => ({
+      lineId:       l.lineId,
+      stockKey:     l.stockKey,
+      qty:          toNum(l.qty),
+      issuedQty:    toNum(l.issuedQty),
+      purchasedQty: toNum(l.purchasedQty),
+    }));
+  });
+
   app.post<{ Params: { id: string } }>("/mtos/:id/transition", auth, async (req) => {
     const m = await requireMember(db, req);
     const body = transitionSchema.parse(req.body);

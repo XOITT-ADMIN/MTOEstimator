@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { View } from "react-native";
 
 import { BottomBar, Button, IconButton, T, EmptyState, colors } from "../ui";
@@ -17,6 +17,7 @@ import { useInventory } from "../inventory/InventoryContext";
 import { shareEstimateByEmail, shareEstimateByWhatsApp } from "../utils/exportEstimate";
 import { calculateEstimateBreakdown } from "../pricing/calculations";
 import { confirmAction, notify } from "../utils/confirm";
+import { api } from "../api/client";
 
 // One MTO: header + Details / Items / Summary / History, and the Action Bar for whatever move
 // (Submit, Approve, Reject, …) the signed-in person can make right now.
@@ -34,7 +35,15 @@ export default function EstimateDetailScreen({ route, navigation }) {
   const isOwnMto = !estimate?.createdBy || estimate.createdBy.id === user?.uid;
   const [tab, setTab] = useState("items");
   const [sharing, setSharing] = useState(null);
+  const [dispatches, setDispatches] = useState([]);
   const breakdown = useMemo(() => (estimate ? calculateEstimateBreakdown(estimate) : null), [estimate]);
+
+  useEffect(() => {
+    if (!estimate || estimate.status !== "DISPATCHED") return;
+    api("GET", `/mtos/${estimate.id}/dispatches`)
+      .then((data) => setDispatches(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, [estimate?.id, estimate?.status]);
 
   async function transition(to, comment) {
     await transitionMto(estimate.id, to, comment);
@@ -101,7 +110,7 @@ export default function EstimateDetailScreen({ route, navigation }) {
       </View>
 
       <BottomBar style={{ gap: 10, paddingHorizontal: 16 }}>
-        <ActionBar estimate={estimate} roles={roles} isOwnMto={isOwnMto} onTransition={transition} />
+        <ActionBar estimate={estimate} roles={roles} isOwnMto={isOwnMto} onTransition={transition} dispatches={dispatches} />
         {tab === "history" ? null : tab === "summary" ? (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
             <Button title="Export PDF" icon="fileDown" onPress={openPdf} style={{ flex: 1 }} />
