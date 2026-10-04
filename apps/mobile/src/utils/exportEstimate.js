@@ -11,12 +11,10 @@ import {
   calculateEstimateBreakdown,
 } from "../pricing/calculations";
 import { formatINR } from "../utils/currency";
-import { api } from "../api/client";
 import { buildQuotationHtml } from "./quotationHtml";
 // pdfBlob.js (native) vs pdfBlob.web.js (web) — Metro picks the right one for the platform.
 // Both export estimatePdfBase64(estimate, company); only the web build also exports
 // downloadEstimatePdf, since only there does "download" need to be a separate step.
-import { estimatePdfBase64 } from "./pdfBlob";
 
 function csvEscape(value) {
   const str = String(value ?? "");
@@ -42,9 +40,9 @@ export function buildEstimateCsv(estimate) {
     "Core",
     "Qty",
     "Unit",
-    "Material rate",
+    "Budget rate (material)",
     "Material amount",
-    "Labour rate",
+    "Indicative labour rate",
     "Labour amount",
     "Line total",
     "Remarks",
@@ -120,7 +118,7 @@ export async function shareEstimatePdf(estimate, company) {
     return;
   }
 
-  const { uri } = await Print.printToFileAsync({ html });
+  const { uri } = await Print.printToFileAsync({ html, width: 595, height: 842 });
 
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(uri, {
@@ -154,7 +152,7 @@ export async function shareEstimateByEmail(estimate, company) {
     return shareEstimatePdf(estimate, company);
   }
   const html = buildQuotationHtml(estimate, company);
-  const { uri } = await Print.printToFileAsync({ html });
+  const { uri } = await Print.printToFileAsync({ html, width: 595, height: 842 });
   await MailComposer.composeAsync({ subject, body, attachments: [uri] });
 }
 
@@ -178,18 +176,4 @@ export async function shareEstimateByWhatsApp(estimate, company) {
     return;
   }
   return shareEstimatePdf(estimate, company);
-}
-
-// Uploads the estimate's PDF and asks the server to email it to the company's notification
-// address (Settings › Notifications), if one is configured. Best-effort and silent: a field
-// engineer marking an estimate Ready shouldn't see an error over a "nice to have" admin copy.
-export async function notifyEstimateReady(estimate, company) {
-  try {
-    const pdfBase64 = await estimatePdfBase64(estimate, company);
-    const res = await api("POST", `/estimates/${estimate.id}/notify-ready`, { pdfBase64 });
-    if (!res?.sent) console.warn("[notifyEstimateReady] server did not send — check Settings > Notifications has an address, and that SMTP is configured on the server.");
-  } catch (e) {
-    // offline, no server configured, or the request failed — quietly skip, but leave a trace for debugging
-    console.warn("[notifyEstimateReady] failed:", e?.message || e);
-  }
 }

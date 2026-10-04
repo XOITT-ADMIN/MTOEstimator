@@ -13,7 +13,6 @@ const DEFAULT_PROFILE = {
   phone: "",
   email: "",
   gstin: "",
-  notificationEmail: "",
   termsAndConditions:
     "1. Rates are valid as stated above and subject to change thereafter.\n" +
     "2. Material to be verified on-site before installation.\n" +
@@ -21,8 +20,9 @@ const DEFAULT_PROFILE = {
     "4. GST as applicable is extra unless shown as included above.",
 };
 
-// owner            — created the company, full control
-// admin            — manages the library (rates, stock), the team; everything a PM can do
+// Organisation level (Team screen): owner (created the company) and admin (manages the library,
+// team and projects; everything a PM can do). Everything below is held PER PROJECT — a person
+// can be a Site Supervisor on one project and Finance on another (project screen › Team).
 // site_supervisor  — field engineer: creates/submits MTOs, records site use and wastage
 // project_manager  — creates/renames/closes projects; approves or rejects MTOs
 // finance          — marks an approved MTO Budget OK, or sends it back
@@ -31,18 +31,16 @@ const DEFAULT_PROFILE = {
 // viewer           — read-only
 // A person can hold more than one of these at once (e.g. Project Manager + Procurement).
 export const ROLES = ["owner", "admin", "site_supervisor", "project_manager", "finance", "procurement", "logistics", "viewer"];
-export const ASSIGNABLE_ROLES = ROLES.filter((r) => r !== "owner");
-export const ROLE_LABELS = {
-  owner: "Owner",
-  admin: "Admin",
-  site_supervisor: "Site Supervisor",
-  project_manager: "Project Manager",
-  finance: "Finance",
-  procurement: "Procurement",
-  logistics: "Logistics",
-  viewer: "Viewer",
+// What can be handed out on the Team screen (organisation level) vs on a project.
+export const ASSIGNABLE_ROLES = ["admin"];
+// Names of the company's own roles (key → name), kept current from the server so any screen can
+// show "Site Supervisor" or whatever the company renamed it to.
+let roleNames = {};
+export const setRoleNames = (defs) => {
+  roleNames = Object.fromEntries((defs || []).map((r) => [r.key, r.name]));
 };
-export const roleLabel = (r) => ROLE_LABELS[r] || r;
+export const ROLE_LABELS = { owner: "Owner", admin: "Admin" };
+export const roleLabel = (r) => ROLE_LABELS[r] || roleNames[r] || r;
 export const rolesLabel = (roles) => (roles || []).map(roleLabel).join(" · ") || "No roles";
 
 const CompanyContext = createContext(null);
@@ -58,7 +56,9 @@ export function CompanyProvider({ children }) {
   const [localLoaded, setLocalLoaded] = useState(false);
 
   const [company, setCompany] = useState(null);
-  const [roles, setRoles] = useState([]);
+  const [roles, setRoles] = useState([]); // organisation roles: owner / admin
+  const [projectRoles, setProjectRoles] = useState({}); // { [projectId]: [role key, …] }
+  const [roleDefs, setRoleDefs] = useState([]); // the company's roles: [{ key, name, permissions, … }]
   const [members, setMembers] = useState([]);
   const [invites, setInvites] = useState([]);
   const [status, setStatus] = useState(apiEnabled ? "loading" : "local");
@@ -90,10 +90,15 @@ export function CompanyProvider({ children }) {
     if (me?.membership && me.company) {
       setCompany(me.company);
       setRoles(me.membership.roles || []);
+      setProjectRoles(me.membership.projectRoles || {});
+      setRoleNames(me.roleDefs);
+      setRoleDefs(me.roleDefs || []);
       setStatus("member");
     } else {
       setCompany(null);
       setRoles([]);
+      setProjectRoles({});
+      setRoleDefs([]);
       setMembers([]);
       setInvites([]);
       setStatus("none");
@@ -143,6 +148,8 @@ export function CompanyProvider({ children }) {
       setStatus("loading");
       setCompany(null);
       setRoles([]);
+      setProjectRoles({});
+      setRoleDefs([]);
       setMembers([]);
       setInvites([]);
       return;
@@ -203,11 +210,11 @@ export function CompanyProvider({ children }) {
   );
 
   const invite = useCallback(
-    async ({ email, name, roles: inviteRoles }) => {
+    async ({ email, name, roles: inviteRoles, projects: inviteProjects }) => {
       const addr = normaliseEmail(email);
       if (!isValidEmail(addr)) throw new Error("Enter a valid email address.");
       if (!apiEnabled) throw new Error("Inviting staff needs a server. Set expo.extra.apiUrl in app.json.");
-      const r = await api("POST", "/invites", { email: addr, name: String(name || "").trim(), roles: inviteRoles?.length ? inviteRoles : ["site_supervisor"] });
+      const r = await api("POST", "/invites", { email: addr, name: String(name || "").trim(), roles: inviteRoles || [], projects: inviteProjects || [] });
       await loadTeam(roles);
       return r;
     },
@@ -243,6 +250,20 @@ export function CompanyProvider({ children }) {
   }, [refresh]);
 
   const effectiveRoles = apiEnabled ? roles : user ? ["owner"] : [];
+  // What this person may do on one project: owner/admin may do everything; anyone else gets the
+  // permissions of the roles they hold there, as the company has defined them. (The server
+  // checks the same rules.)
+  const isOrgAdmin = effectiveRoles.includes("owner") || effectiveRoles.includes("admin");
+  const can = useCallback(
+    (perm, projectId) => {
+      if (isOrgAdmin) return true;
+      const keys = (projectId && projectRoles[projectId]) || [];
+      return roleDefs.some((r) => keys.includes(r.key) && r.permissions.includes(perm));
+    },
+    [isOrgAdmin, projectRoles, roleDefs]
+  );
+  // Something with has(permission) for one project — what the MTO workflow helpers take.
+  const permsFor = useCallback((projectId) => ({ has: (perm) => can(perm, projectId) }), [can]);
 
   const value = useMemo(
     () => ({
@@ -257,13 +278,18 @@ export function CompanyProvider({ children }) {
       members,
       invites,
       roles: effectiveRoles,
+      projectRoles,
+      roleDefs,
+      can,
+      permsFor,
       isOwner: effectiveRoles.includes("owner"),
       // What this person may do (the server enforces the same rules).
       canManageTeam: effectiveRoles.includes("owner") || effectiveRoles.includes("admin"),
       canManageLibrary: effectiveRoles.includes("owner") || effectiveRoles.includes("admin"),
-      canEditEstimates: effectiveRoles.length > 0 && effectiveRoles.some((r) => r !== "viewer"),
-      // Creating/renaming a project is a PM/Admin/Owner job (see apps/api/src/routes/projects.ts).
-      canManageProjects: effectiveRoles.includes("owner") || effectiveRoles.includes("admin") || effectiveRoles.includes("project_manager"),
+      // Anywhere at all: an organisation role, or a non-viewer role on at least one project.
+      canEditEstimates: isOrgAdmin || Object.keys(projectRoles).some((pid) => can("mto.edit", pid)),
+      // Creating a project is an Admin/Owner job; renaming/closing one also belongs to its own PM.
+      canManageProjects: effectiveRoles.includes("owner") || effectiveRoles.includes("admin"),
       createCompany,
       invite,
       revokeInvite,
@@ -272,7 +298,7 @@ export function CompanyProvider({ children }) {
       recheckInvites,
       refresh,
     }),
-    [profile, localLoaded, updateProfile, status, error, company, members, invites, effectiveRoles, createCompany, invite, revokeInvite, setMemberRoles, removeMember, recheckInvites, refresh]
+    [profile, localLoaded, updateProfile, status, error, company, members, invites, effectiveRoles, isOrgAdmin, projectRoles, roleDefs, can, permsFor, createCompany, invite, revokeInvite, setMemberRoles, removeMember, recheckInvites, refresh]
   );
 
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;
@@ -285,10 +311,14 @@ export function useCompany() {
 }
 
 // For useLocalCollection: share this collection through the API while signed in to a company.
-export function useCompanyRemote(resource) {
+// Stock and rates are kept per project: pass { projectId } and the collection is that project's
+// (projectId null → "no project picked yet", the collection stays empty and idle).
+export function useCompanyRemote(resource, scope) {
   const { serverMode, status, companyId } = useCompany();
+  const scoped = !!scope;
+  const projectId = scope?.projectId || null;
   return useMemo(
-    () => (serverMode && status === "member" && companyId ? { resource, companyId } : null),
-    [serverMode, status, companyId, resource]
+    () => (serverMode && status === "member" && companyId ? { resource, companyId, scoped, projectId } : null),
+    [serverMode, status, companyId, resource, scoped, projectId]
   );
 }

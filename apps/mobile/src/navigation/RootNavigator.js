@@ -20,6 +20,7 @@ import NewEstimateScreen from "../screens/NewEstimateScreen";
 import AddItemScreen from "../screens/AddItemScreen";
 import PdfPreviewScreen from "../screens/PdfPreviewScreen";
 import TeamScreen from "../screens/TeamScreen";
+import RolesScreen from "../screens/RolesScreen";
 
 // Screen map:
 //   signed out      → Splash → Login
@@ -66,6 +67,7 @@ export default function RootNavigator() {
             <Stack.Screen name="EstimateDetail" component={EstimateDetailScreen} />
             <Stack.Screen name="ProjectDetail" component={ProjectDetailScreen} />
             <Stack.Screen name="Team" component={TeamScreen} />
+            <Stack.Screen name="Roles" component={RolesScreen} />
             <Stack.Screen name="NewEstimate" component={NewEstimateScreen} options={sheet} />
             <Stack.Screen name="AddItem" component={AddItemScreen} options={sheet} />
             <Stack.Screen name="PdfPreview" component={PdfPreviewScreen} options={{ presentation: "fullScreenModal", animation: "slide_from_bottom" }} />

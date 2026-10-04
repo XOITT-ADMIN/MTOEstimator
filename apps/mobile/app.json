@@ -2,7 +2,7 @@
   "expo": {
     "name": "XMTO",
     "slug": "xmto",
-    "description": "XMTO \u2013 MEP Material Take-off by XOITT Transformation. Plumbing and electrical material take-offs, priced on site, shared with your team.",
+    "description": "XMTO \u2013 MEP Material Take-off by XOITT Transformation. Plumbing and electrical material take-offs, shared with your team.",
     "version": "1.0.0",
     "scheme": "xmto",
     "orientation": "portrait",

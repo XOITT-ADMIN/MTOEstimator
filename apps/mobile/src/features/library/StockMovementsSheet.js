@@ -5,13 +5,13 @@ import { Sheet, T, EmptyState, colors } from "../../ui";
 import { api, apiEnabled } from "../../api/client";
 import { shortDate } from "../estimates";
 
-const TYPE_LABEL = { RECEIPT: "Receipt", ISSUE: "Issue", RETURN: "Return", ADJUST: "Adjust" };
+const TYPE_LABEL = { RECEIPT: "Stock in", ISSUE: "Allocated", RETURN: "Return", ADJUST: "Adjust" };
 const TYPE_COLOR = { RECEIPT: "success", ISSUE: "danger", RETURN: "success", ADJUST: "muted" };
 const TYPE_SIGN  = { RECEIPT: "+", ISSUE: "−", RETURN: "+", ADJUST: "±" };
 
 // Movements ledger sheet for a single stock line — shows every RECEIPT / ISSUE / RETURN / ADJUST
 // with who did it and when. Only available when connected to a shared workspace (API required).
-export function StockMovementsSheet({ stockLineId, lineLabel, onClose }) {
+export function StockMovementsSheet({ projectId, stockLineId, lineLabel, onClose }) {
   const [state, setState] = useState({ loading: true, rows: null, error: null });
 
   useEffect(() => {
@@ -21,11 +21,11 @@ export function StockMovementsSheet({ stockLineId, lineLabel, onClose }) {
     }
     let alive = true;
     setState({ loading: true, rows: null, error: null });
-    api("GET", `/stock/movements?stockLineId=${encodeURIComponent(stockLineId)}`)
+    api("GET", `/stock/movements?stockLineId=${encodeURIComponent(stockLineId)}&projectId=${encodeURIComponent(projectId || "")}`)
       .then((rows) => alive && setState({ loading: false, rows, error: null }))
       .catch((e) => alive && setState({ loading: false, rows: null, error: e?.message || "Could not load movements." }));
     return () => { alive = false; };
-  }, [stockLineId]);
+  }, [stockLineId, projectId]);
 
   return (
     <Sheet visible title="Stock movements" subtitle={lineLabel} onClose={onClose}>
@@ -36,7 +36,7 @@ export function StockMovementsSheet({ stockLineId, lineLabel, onClose }) {
       ) : state.error ? (
         <EmptyState icon="alert" title="Couldn't load" body={state.error} style={{ paddingHorizontal: 20, paddingVertical: 24 }} />
       ) : !state.rows?.length ? (
-        <EmptyState icon="arrowUpDown" title="No movements yet" body="Issue, receive or adjust this stock line to see the ledger." style={{ paddingHorizontal: 20, paddingVertical: 24 }} />
+        <EmptyState icon="arrowUpDown" title="No movements yet" body="Stock in, allocate or adjust this stock line to see the ledger." style={{ paddingHorizontal: 20, paddingVertical: 24 }} />
       ) : (
         <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 32, gap: 2 }}>
           {state.rows.map((r) => (

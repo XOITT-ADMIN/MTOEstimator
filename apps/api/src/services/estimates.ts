@@ -1,7 +1,7 @@
 import { stockKey } from "@mto/shared";
 
 import { Prisma, type Db } from "../db.js";
-import { can, type Member } from "../lib/access.js";
+import { hasPerm, isOrgAdmin, projectIdsOf, type Member } from "../lib/access.js";
 import { conflict, forbidden, notFound } from "../lib/errors.js";
 import { estimateSchema } from "./schemas.js";
 
@@ -14,10 +14,14 @@ export type SaveResult =
   | { status: "saved"; item: Record<string, unknown> }
   | { status: "stale"; item: Record<string, unknown> };
 
+// Owner/admin see every MTO. Everyone else sees the MTOs of the projects they're on — all of
+// them if their role there allows it ("See everyone's MTOs"), otherwise just their own.
 function visibleWhere(m: Member): Prisma.EstimateWhereInput {
-  return can.seeAllEstimates(m.roles)
-    ? { companyId: m.companyId, deletedAt: null }
-    : { companyId: m.companyId, deletedAt: null, createdById: m.userId };
+  if (isOrgAdmin(m)) return { companyId: m.companyId, deletedAt: null };
+  const or: Prisma.EstimateWhereInput[] = projectIdsOf(m).map((projectId) =>
+    hasPerm(m, projectId, "mto.view_all") ? { projectId } : { projectId, createdById: m.userId }
+  );
+  return { companyId: m.companyId, deletedAt: null, OR: or.length ? or : [{ id: "" }] };
 }
 
 export async function listEstimates(db: Db, m: Member) {
@@ -35,14 +39,13 @@ export async function listEstimates(db: Db, m: Member) {
  * with a clear reason instead of silently reopening an approved MTO.
  */
 export async function saveEstimate(db: Db, m: Member, raw: unknown): Promise<SaveResult> {
-  if (!can.editEstimates(m.roles)) throw forbidden("Viewers can't edit MTOs.");
   const doc = estimateSchema.parse(raw);
 
   return db.$transaction(async (tx): Promise<SaveResult> => {
     const existing = await tx.estimate.findUnique({ where: { companyId_id: { companyId: m.companyId, id: doc.id } } });
 
     if (existing && !existing.deletedAt) {
-      if (!can.seeAllEstimates(m.roles) && existing.createdById !== m.userId) throw forbidden("That MTO belongs to someone else.");
+      if (!hasPerm(m, existing.projectId, "mto.view_all") && existing.createdById !== m.userId) throw forbidden("That MTO belongs to someone else.");
       if (Number(existing.clientUpdatedAt) > doc.updatedAt) return { status: "stale", item: existing.data as Record<string, unknown> };
       if (!EDITABLE_STATUSES.has(existing.status)) {
         throw conflict(`This MTO is "${existing.status}" now and can no longer be edited here.`, "not_editable");
@@ -51,6 +54,7 @@ export async function saveEstimate(db: Db, m: Member, raw: unknown): Promise<Sav
 
     const project = await tx.project.findUnique({ where: { id: doc.projectId } });
     if (!project || project.companyId !== m.companyId) throw notFound("Pick a project for this MTO.");
+    if (!hasPerm(m, project.id, "mto.edit")) throw forbidden("Your role on this project can't create or edit MTOs.");
     const changingProject = !existing || existing.projectId !== doc.projectId;
     if (changingProject && project.status !== "open") throw conflict("That project is closed — pick an open project.", "project_closed");
 
@@ -60,16 +64,20 @@ export async function saveEstimate(db: Db, m: Member, raw: unknown): Promise<Sav
     let createdById = existing?.createdById ?? m.userId;
     const isNew = !existing || existing.deletedAt;
     if (isNew) {
-      const c = await tx.company.update({ where: { id: m.companyId }, data: { estimateSeq: { increment: 1 } }, select: { estimateSeq: true } });
-      estimateNumber = `MTO-${String(c.estimateSeq).padStart(4, "0")}`;
+      const c = await tx.project.update({ where: { id: project.id }, data: { mtoSeq: { increment: 1 } }, select: { mtoSeq: true } });
+      estimateNumber = `${project.code}-MTO-${String(c.mtoSeq).padStart(4, "0")}`;
       createdById = m.userId;
     }
 
     const owner = createdById === m.userId ? { id: m.userId, name: m.name } : ((existing?.data as { createdBy?: unknown })?.createdBy ?? null);
-    const data = { ...doc, status, estimateNumber, createdBy: owner } as Record<string, unknown>;
+    // The number doubles as the name unless someone typed a title — no need to type one.
+    // (A queued offline MTO carries a placeholder like "AKKO-MTO-····" — also "no title".)
+    const typed = doc.name.trim();
+    const name = typed && typed !== "Untitled estimate" && !typed.includes("····") ? typed : estimateNumber!;
+    const data = { ...doc, name, status, estimateNumber, createdBy: owner } as Record<string, unknown>;
     const row = {
       estimateNumber: estimateNumber!,
-      name: doc.name,
+      name,
       status,
       projectId: doc.projectId,
       createdById,
@@ -111,10 +119,10 @@ export async function saveEstimate(db: Db, m: Member, raw: unknown): Promise<Sav
 }
 
 export async function deleteEstimate(db: Db, m: Member, id: string) {
-  if (!can.editEstimates(m.roles)) throw forbidden("Viewers can't delete MTOs.");
   const existing = await db.estimate.findUnique({ where: { companyId_id: { companyId: m.companyId, id } } });
   if (!existing || existing.deletedAt) return;
-  if (!can.seeAllEstimates(m.roles) && existing.createdById !== m.userId) throw forbidden("That MTO belongs to someone else.");
+  if (!hasPerm(m, existing.projectId, "mto.edit")) throw forbidden("Your role on this project can't delete MTOs.");
+  if (!hasPerm(m, existing.projectId, "mto.view_all") && existing.createdById !== m.userId) throw forbidden("That MTO belongs to someone else.");
   // Only a Draft can be deleted outright (brief, section 5) — anything past that uses Cancel
   // (a later phase), so its number and history stay on the record.
   if (existing.status !== "DRAFT") throw conflict("Only a Draft MTO can be deleted — cancel it instead.", "not_deletable");

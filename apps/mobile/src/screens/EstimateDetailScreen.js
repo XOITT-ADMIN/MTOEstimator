@@ -1,8 +1,9 @@
-import React, { useMemo, useState, useEffect } from "react";
-import { View } from "react-native";
+import React, { useMemo, useState } from "react";
+import { View, ActivityIndicator } from "react-native";
 
 import { BottomBar, Button, IconButton, T, EmptyState, colors } from "../ui";
 import { EstimateHeader } from "../features/estimate/EstimateHeader";
+import { SavingOverlay } from "../features/estimate/SavingOverlay";
 import { ItemsTab } from "../features/estimate/ItemsTab";
 import { DetailsTab } from "../features/estimate/DetailsTab";
 import { SummaryTab } from "../features/estimate/SummaryTab";
@@ -14,39 +15,43 @@ import { useEstimates } from "../context/EstimatesContext";
 import { useCompany } from "../context/CompanyContext";
 import { useAuth } from "../context/AuthContext";
 import { useInventory } from "../inventory/InventoryContext";
+import { useProjectScope } from "../context/ProjectsContext";
 import { shareEstimateByEmail, shareEstimateByWhatsApp } from "../utils/exportEstimate";
 import { calculateEstimateBreakdown } from "../pricing/calculations";
 import { confirmAction, notify } from "../utils/confirm";
-import { api } from "../api/client";
 
 // One MTO: header + Details / Items / Summary / History, and the Action Bar for whatever move
 // (Submit, Approve, Reject, …) the signed-in person can make right now.
 export default function EstimateDetailScreen({ route, navigation }) {
   const { estimateId } = route.params;
-  const { getEstimate, updateEstimate, removeItem, duplicateItem, transitionMto, fetchHistory } = useEstimates();
+  const { getEstimate, loaded, updateEstimate, removeItem, duplicateItem, transitionMto, fetchHistory } = useEstimates();
   const { user } = useAuth();
-  const { profile: companyProfile, roles, canEditEstimates = true } = useCompany();
+  const { profile: companyProfile, permsFor } = useCompany();
   const { getAvailability } = useInventory();
 
   function duplicateLine(it) {
     duplicateItem(estimate.id, it.id);
   }
   const estimate = getEstimate(estimateId);
+  useProjectScope(estimate?.projectId); // stock and rates shown here are this MTO's project's
+  const perms = permsFor(estimate?.projectId);
+  const canEditEstimates = perms.has("mto.edit");
   const isOwnMto = !estimate?.createdBy || estimate.createdBy.id === user?.uid;
   const [tab, setTab] = useState("items");
+  const [procurementVersion, setProcurementVersion] = useState(0); // bumps when procurement is saved
   const [sharing, setSharing] = useState(null);
-  const [dispatches, setDispatches] = useState([]);
   const breakdown = useMemo(() => (estimate ? calculateEstimateBreakdown(estimate) : null), [estimate]);
-
-  useEffect(() => {
-    if (!estimate || estimate.status !== "DISPATCHED") return;
-    api("GET", `/mtos/${estimate.id}/dispatches`)
-      .then((data) => setDispatches(Array.isArray(data) ? data : []))
-      .catch(() => {});
-  }, [estimate?.id, estimate?.status]);
 
   async function transition(to, comment) {
     await transitionMto(estimate.id, to, comment);
+  }
+
+  if (!estimate && !loaded) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center", alignItems: "center" }}>
+        <ActivityIndicator size="large" color={colors.action} />
+      </View>
+    );
   }
 
   if (!estimate) {
@@ -84,6 +89,7 @@ export default function EstimateDetailScreen({ route, navigation }) {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      <SavingOverlay />
       <EstimateHeader estimate={estimate} tab={tab} onTab={setTab} onBack={() => navigation.goBack()} onPdf={openPdf} />
 
       <View style={{ flex: 1 }}>
@@ -101,7 +107,7 @@ export default function EstimateDetailScreen({ route, navigation }) {
         ) : tab === "details" ? (
           <DetailsTab estimate={estimate} update={update} canEdit={canEdit} />
         ) : tab === "procurement" ? (
-          <ProcurementTab estimate={estimate} roles={roles} onProcured={() => {}} />
+          <ProcurementTab estimate={estimate} perms={perms} onProcured={() => setProcurementVersion((v) => v + 1)} />
         ) : tab === "history" ? (
           <HistoryTab estimateId={estimate.id} fetchHistory={fetchHistory} />
         ) : (
@@ -110,7 +116,7 @@ export default function EstimateDetailScreen({ route, navigation }) {
       </View>
 
       <BottomBar style={{ gap: 10, paddingHorizontal: 16 }}>
-        <ActionBar estimate={estimate} roles={roles} isOwnMto={isOwnMto} onTransition={transition} dispatches={dispatches} />
+        <ActionBar estimate={estimate} perms={perms} isOwnMto={isOwnMto} onTransition={transition} refreshKey={`${tab}-${procurementVersion}`} />
         {tab === "history" ? null : tab === "summary" ? (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
             <Button title="Export PDF" icon="fileDown" onPress={openPdf} style={{ flex: 1 }} />

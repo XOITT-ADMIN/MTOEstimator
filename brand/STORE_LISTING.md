@@ -9,7 +9,7 @@ Product of **XOITT Transformation Pvt Ltd** · https://xoitt.com · Bangalore, I
 | App name on the phone (under the icon) | XMTO | — |
 | App Store name / Google Play title | XMTO – MEP Material Take-off | 30 |
 | App Store subtitle | Plumbing & electrical BOQ | 30 |
-| Google Play short description | MEP material take-off for plumbing & electrical — priced on site, shared live. | 80 |
+| Google Play short description | MEP material take-off for plumbing & electrical — shared live with your team. | 80 |
 | Bundle ID (iOS) / package (Android) | com.xoitt.xmto | — |
 | Category | Business (secondary: Productivity) | — |
 

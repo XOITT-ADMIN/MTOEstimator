@@ -36,7 +36,7 @@ export function ItemsTab({ estimate, breakdown, getAvailability, canEdit, onEdit
       <EmptyState
         icon="box"
         title="No items yet"
-        body="Log what you see on site. XMTO prices each line from your company's rates."
+        body="Log what you see on site. XMTO adds a budgetary rate to each line from your library."
         action={canEdit ? "Add item" : undefined}
         onAction={onAdd}
         style={{ marginTop: 48, paddingHorizontal: 20 }}

@@ -1,12 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
-import { requireMember } from "../lib/access.js";
+import { hasPerm, isOrgAdmin, permsIn, projectIdsOf, requireMember, type Member } from "../lib/access.js";
 import { badRequest, conflict, forbidden, notFound } from "../lib/errors.js";
-import { canPerform, findTransition, isMtoStatus, NOTIFY_ON_REACH, statusesWaitingOnRoles, STATUSES_WAITING_ON_CREATOR } from "../lib/mtoStatus.js";
+import { canPerform, findTransition, isMtoStatus, NOTIFY_ON_REACH, statusesWaitingOnPerms, STATUSES_WAITING_ON_CREATOR } from "../lib/mtoStatus.js";
 import { toNum } from "../lib/num.js";
 import type { Deps } from "../app.js";
 import type { Prisma } from "../db.js";
+import { returnMtoLeftover } from "../services/siteStock.js";
 
 const transitionSchema = z.object({
   to: z.string().min(1).max(40),
@@ -38,15 +39,28 @@ const deliverSchema = z.object({
 export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps) {
   const auth = { onRequest: [app.authenticate] };
 
+  // The MTO must exist in this company and be on a project the caller belongs to (owner/admin: any).
+  async function requireMtoAccess(m: Member, id: string) {
+    const mto = await db.estimate.findUnique({ where: { companyId_id: { companyId: m.companyId, id } }, select: { projectId: true } });
+    if (!mto || (!isOrgAdmin(m) && !m.projectRoles[mto.projectId])) throw notFound("MTO not found.");
+    return mto;
+  }
+
   // "Waiting for you" (by role) plus "My MTOs" (mine, whatever their status).
   app.get("/mtos/inbox", auth, async (req) => {
     const m = await requireMember(db, req);
-    const roleStatuses = statusesWaitingOnRoles(m.roles);
-    const isSupervisor = m.roles.includes("site_supervisor");
-
+    // Roles are per project: what's waiting on you is worked out project by project. Owner/admin
+    // act company-wide, so they hold every permission on every project.
+    const scopes: { project: Record<string, unknown>; perms: Set<string> }[] = isOrgAdmin(m)
+      ? [{ project: {}, perms: permsIn(m, "") }]
+      : projectIdsOf(m).map((projectId) => ({ project: { projectId }, perms: permsIn(m, projectId) }));
     const or: Record<string, unknown>[] = [];
-    if (roleStatuses.length) or.push({ status: { in: roleStatuses } });
-    if (isSupervisor) or.push({ status: { in: STATUSES_WAITING_ON_CREATOR }, createdById: m.userId });
+    for (const { project, perms } of scopes) {
+      const statuses = statusesWaitingOnPerms(perms);
+      if (statuses.length) or.push({ ...project, status: { in: statuses } });
+      // A rejected MTO waits on its creator — anyone who can submit.
+      if (perms.has("mto.submit")) or.push({ ...project, status: { in: STATUSES_WAITING_ON_CREATOR }, createdById: m.userId });
+    }
 
     const [waiting, mine] = await Promise.all([
       or.length
@@ -63,8 +77,7 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
 
   app.get<{ Params: { id: string } }>("/mtos/:id/history", auth, async (req) => {
     const m = await requireMember(db, req);
-    const exists = await db.estimate.findUnique({ where: { companyId_id: { companyId: m.companyId, id: req.params.id } }, select: { id: true } });
-    if (!exists) throw notFound("MTO not found.");
+    await requireMtoAccess(m, req.params.id);
     const events = await db.mtoEvent.findMany({
       where: { companyId: m.companyId, estimateId: req.params.id },
       orderBy: { createdAt: "asc" },
@@ -86,8 +99,7 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
   // trusting stale item fields after a reload.
   app.get<{ Params: { id: string } }>("/mtos/:id/lines", auth, async (req) => {
     const m = await requireMember(db, req);
-    const exists = await db.estimate.findUnique({ where: { companyId_id: { companyId: m.companyId, id: req.params.id } }, select: { id: true } });
-    if (!exists) throw notFound("MTO not found.");
+    await requireMtoAccess(m, req.params.id);
     const lines = await db.estimateLine.findMany({
       where: { companyId: m.companyId, estimateId: req.params.id },
     });
@@ -117,8 +129,8 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
       if (!rule) {
         throw conflict(`This MTO is "${row.status}" now — someone may have already moved it. Refresh and try again.`);
       }
-      if (!canPerform(m.roles, rule)) throw forbidden("You don't have the role to make that move.");
-      if (rule.requireOwnMto && !m.roles.includes("owner") && !m.roles.includes("admin") && row.createdById !== m.userId) {
+      if (!canPerform(permsIn(m, row.projectId), rule)) throw forbidden("Your role on this project doesn't allow that move.");
+      if (rule.requireOwnMto && !isOrgAdmin(m) && row.createdById !== m.userId) {
         throw forbidden("That MTO belongs to someone else.");
       }
       if (rule.commentRequired && !body.comment) throw badRequest("Add a comment before you send this back.");
@@ -138,7 +150,7 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
         });
         const notFullyIssued = lines.filter((l) => toNum(l.issuedQty) < toNum(l.qty));
         if (notFullyIssued.length > 0) {
-          throw badRequest(`${notFullyIssued.length} line(s) still need to be fully issued before marking Ready to dispatch.`);
+          throw badRequest(`${notFullyIssued.length} line(s) still need to be fully allocated before marking Ready to dispatch.`);
         }
       }
 
@@ -153,10 +165,11 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
           if (issued <= 0) continue;
           await tx.$executeRaw`
             UPDATE "StockLine" SET "onHand" = "onHand" + ${issued}
-            WHERE "companyId" = ${m.companyId} AND "key" = ${line.stockKey}`;
+            WHERE "companyId" = ${m.companyId} AND "projectId" = ${row.projectId} AND "key" = ${line.stockKey}`;
           await tx.stockMovement.create({
             data: {
               companyId:   m.companyId,
+              projectId:   row.projectId,
               stockLineId: line.stockKey,
               type:        "RETURN",
               qty:         issued,
@@ -166,6 +179,13 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
             },
           });
         }
+      }
+
+      // Closing an MTO: its unused material is recorded as returned (shows in the returns report).
+      if (body.to === "CLOSED") {
+        const project = await tx.project.findUniqueOrThrow({ where: { id: row.projectId }, select: { id: true, name: true } });
+        const est = await tx.estimate.findUniqueOrThrow({ where: { companyId_id: { companyId: m.companyId, id } }, select: { id: true, estimateNumber: true } });
+        await returnMtoLeftover(tx, m.companyId, m.userId, project, est, `MTO closed: ${est.estimateNumber}`);
       }
 
       const now = new Date();
@@ -196,7 +216,7 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
     });
 
     hub.publish(m.companyId, "estimates", { by: m.userId });
-    if (body.to === "CANCELLED") hub.publish(m.companyId, "stock", { by: m.userId });
+    if (body.to === "CANCELLED" || body.to === "CLOSED") hub.publish(m.companyId, "stock", { by: m.userId });
 
     sendTransitionEmail({ db, mailer, companyId: m.companyId, estimateId: id, toStatus: body.to, actorName: m.name, comment: body.comment, createdById: result.createdById, mtoData: result.nextData }).catch(() => {});
 
@@ -206,19 +226,19 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
   // Phase 3: Procurement records how much to issue from stock and how much to buy externally.
   app.post<{ Params: { id: string } }>("/mtos/:id/procurement", auth, async (req) => {
     const m = await requireMember(db, req);
-    if (!m.roles.includes("procurement") && !m.roles.includes("owner") && !m.roles.includes("admin")) {
-      throw forbidden("Only Procurement, Admin or Owner can issue stock for an MTO.");
-    }
     const body = procurementSchema.parse(req.body);
     const { id } = req.params;
 
     const mto = await db.estimate.findUnique({
       where: { companyId_id: { companyId: m.companyId, id } },
-      select: { status: true, deletedAt: true },
+      select: { status: true, deletedAt: true, projectId: true },
     });
     if (!mto || mto.deletedAt) throw notFound("MTO not found.");
+    if (!hasPerm(m, mto.projectId, "mto.procure")) {
+      throw forbidden("Your role on this project can't allocate stock for an MTO.");
+    }
     if (mto.status !== "BUDGET_OK" && mto.status !== "READY_TO_DISPATCH") {
-      throw badRequest(`Can only issue stock for an MTO in Budget OK status (this one is "${mto.status}").`);
+      throw badRequest(`Can only allocate stock for an MTO in Budget OK status (this one is "${mto.status}").`);
     }
 
     const updatedLines = await db.$transaction(async (tx) => {
@@ -235,9 +255,9 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
         if (entry.issueQty > 0) {
           const stockRows = await tx.$queryRaw<{ key: string; onHand: string }[]>`
             SELECT "key", "onHand" FROM "StockLine"
-            WHERE "companyId" = ${m.companyId} AND "key" = ${line.stockKey} FOR UPDATE`;
+            WHERE "companyId" = ${m.companyId} AND "projectId" = ${mto.projectId} AND "key" = ${line.stockKey} FOR UPDATE`;
           const stock = stockRows[0];
-          if (!stock) throw badRequest(`No stock line found for "${line.stockKey}". Add it to the stock library first.`);
+          if (!stock) throw badRequest(`No stock line found for "${line.stockKey}" in this project. Add it to the project's stock first.`);
 
           const available = toNum(stock.onHand);
           if (entry.issueQty > available) {
@@ -246,11 +266,12 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
 
           await tx.$executeRaw`
             UPDATE "StockLine" SET "onHand" = "onHand" - ${entry.issueQty}
-            WHERE "companyId" = ${m.companyId} AND "key" = ${line.stockKey}`;
+            WHERE "companyId" = ${m.companyId} AND "projectId" = ${mto.projectId} AND "key" = ${line.stockKey}`;
 
           await tx.stockMovement.create({
             data: {
               companyId:   m.companyId,
+              projectId:   mto.projectId,
               stockLineId: line.stockKey,
               type:        "ISSUE",
               qty:         entry.issueQty,
@@ -286,17 +307,17 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
   // Phase 4: Create the dispatch record for a Ready-to-dispatch MTO (loading details, transport).
   app.post<{ Params: { id: string } }>("/mtos/:id/dispatch", auth, async (req) => {
     const m = await requireMember(db, req);
-    if (!m.roles.includes("logistics") && !m.roles.includes("owner") && !m.roles.includes("admin")) {
-      throw forbidden("Only Logistics, Admin or Owner can create a dispatch record.");
-    }
     const body = dispatchSchema.parse(req.body);
     const { id } = req.params;
 
     const mto = await db.estimate.findUnique({
       where: { companyId_id: { companyId: m.companyId, id } },
-      select: { status: true, deletedAt: true },
+      select: { status: true, deletedAt: true, projectId: true },
     });
     if (!mto || mto.deletedAt) throw notFound("MTO not found.");
+    if (!hasPerm(m, mto.projectId, "mto.dispatch")) {
+      throw forbidden("Your role on this project can't create a dispatch record.");
+    }
     if (mto.status !== "READY_TO_DISPATCH") {
       throw badRequest(`Dispatch can only be created for a Ready-to-dispatch MTO (this one is "${mto.status}").`);
     }
@@ -321,9 +342,6 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
   // Phase 4: Update a dispatch record (mark dispatched or delivered).
   app.patch<{ Params: { dispatchId: string } }>("/dispatches/:dispatchId", auth, async (req) => {
     const m = await requireMember(db, req);
-    const isLogisticsOrSupervisor = m.roles.includes("logistics") || m.roles.includes("site_supervisor") || m.roles.includes("owner") || m.roles.includes("admin");
-    if (!isLogisticsOrSupervisor) throw forbidden("Only Logistics, Site Supervisor, Admin or Owner can update a dispatch.");
-
     const body = z.object({
       loadingCheck: z.boolean().optional(),
       loadingCost:  z.number().min(0).optional(),
@@ -336,6 +354,11 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
 
     const dispatch = await db.dispatch.findUnique({ where: { id: req.params.dispatchId } });
     if (!dispatch || dispatch.companyId !== m.companyId) throw notFound("Dispatch not found.");
+    const dispatchMto = await db.estimate.findUnique({ where: { companyId_id: { companyId: m.companyId, id: dispatch.estimateId } }, select: { projectId: true } });
+    const dPerms = dispatchMto ? permsIn(m, dispatchMto.projectId) : new Set<string>();
+    if (!dPerms.has("mto.dispatch") && !dPerms.has("mto.deliver")) {
+      throw forbidden("Your role on this project can't update a dispatch.");
+    }
 
     const now = new Date();
     const updated = await db.dispatch.update({
@@ -385,8 +408,7 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
   // Get dispatch records for an MTO
   app.get<{ Params: { id: string } }>("/mtos/:id/dispatches", auth, async (req) => {
     const m = await requireMember(db, req);
-    const exists = await db.estimate.findUnique({ where: { companyId_id: { companyId: m.companyId, id: req.params.id } }, select: { id: true } });
-    if (!exists) throw notFound("MTO not found.");
+    await requireMtoAccess(m, req.params.id);
     const dispatches = await db.dispatch.findMany({
       where: { companyId: m.companyId, estimateId: req.params.id },
       orderBy: { createdAt: "asc" },
@@ -423,25 +445,40 @@ async function sendTransitionEmail({ db, mailer, companyId, estimateId, toStatus
   mtoData: unknown;
 }) {
   if (!mailer.enabled) return;
-  const notify = NOTIFY_ON_REACH[toStatus as keyof typeof NOTIFY_ON_REACH];
-  if (!notify || !notify.length) return;
+  const notify = NOTIFY_ON_REACH[toStatus as keyof typeof NOTIFY_ON_REACH] ?? [];
 
   const data = mtoData as Record<string, unknown>;
   const number = data.estimateNumber as string || estimateId;
   const name   = data.name as string || "";
 
-  const members = await db.membership.findMany({ where: { companyId }, include: { user: true } });
+  const est0 = await db.estimate.findUnique({ where: { companyId_id: { companyId, id: estimateId } }, select: { projectId: true } });
+  const projectId = est0?.projectId ?? "";
+  // Owner/admin hold every permission; everyone else gets it through the roles they hold on this
+  // MTO's project, as the company has defined them.
+  const orgMembers = await db.membership.findMany({ where: { companyId }, include: { user: true } });
+  const projectMembers = await db.projectMember.findMany({ where: { companyId, projectId }, include: { user: true } });
+  const roleRows = await db.orgRole.findMany({ where: { companyId }, select: { key: true, permissions: true } });
+  const rolePerms = new Map(roleRows.map((r) => [r.key, r.permissions]));
+  const holds = (keys: string[], perm: string) => keys.some((k) => rolePerms.get(k)?.includes(perm));
 
   const recipients = new Set<string>();
   for (const target of notify) {
     if (target === "creator") {
-      const creator = members.find((mem) => mem.userId === createdById);
-      if (creator) recipients.add(creator.user.email);
+      const creator = await db.user.findUnique({ where: { id: createdById }, select: { email: true } });
+      if (creator) recipients.add(creator.email);
+    } else if (target === "everyone") {
+      for (const mem of orgMembers) if (mem.roles.length) recipients.add(mem.user.email);
+      for (const mem of projectMembers) recipients.add(mem.user.email);
     } else {
-      for (const mem of members) {
-        if ((mem.roles as string[]).includes(target)) recipients.add(mem.user.email);
-      }
+      for (const mem of orgMembers) if (mem.roles.length) recipients.add(mem.user.email);
+      for (const mem of projectMembers) if (holds(mem.roles, target)) recipients.add(mem.user.email);
     }
+  }
+
+  // "Ready" (cleared for dispatch) also goes to the project's own notification address, if set.
+  if (toStatus === "READY_TO_DISPATCH") {
+    const project = projectId ? await db.project.findUnique({ where: { id: projectId }, select: { notificationEmail: true } }) : null;
+    if (project?.notificationEmail) recipients.add(project.notificationEmail);
   }
 
   if (!recipients.size) return;

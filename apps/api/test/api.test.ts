@@ -38,6 +38,7 @@ const line = (id: string, qty: number) => ({ id, trade: "Plumbing", family: "Pip
 const estimate = (id: string, projectId: string, qty: number, extra: J = {}) => ({ id, name: `Est ${id}`, projectId, updatedAt: Date.now(), items: [line(`${id}-l1`, qty)], ...extra });
 const PIPE_KEY = "Plumbing|Pipe|PVC|40 mm||";
 
+let wtId: string; // "Whitefield Tower" — the project most stock/rates tests work in
 let owner: string, eng1: string, eng2: string, pm: string, finance: string;
 
 before(async () => {
@@ -110,41 +111,58 @@ describe("company + team", () => {
 });
 
 describe("library + stock", () => {
+  before(async () => {
+    const p = await call("POST", "/projects", owner, { name: "Whitefield Tower", siteName: "Whitefield, Bengaluru" });
+    assert.equal(p.status, 200, JSON.stringify(p.json));
+    wtId = p.json.id;
+  });
+
   test("only admins change stock and rates", async () => {
-    const bad = await call("POST", "/sync/stock", eng1, { upserts: [{ trade: "Plumbing", item: "Pipe", material: "PVC", size: "40 mm", stock: 999 }] });
+    const bad = await call("POST", `/sync/stock?projectId=${wtId}`, eng1, { upserts: [{ trade: "Plumbing", item: "Pipe", material: "PVC", size: "40 mm", stock: 999 }] });
     assert.equal(bad.json.results[0].ok, false);
     assert.equal(bad.json.results[0].code, "forbidden");
 
-    const ok = await call("POST", "/sync/stock", owner, { upserts: [{ trade: "Plumbing", family: "Pipe", item: "Pipe", material: "PVC", size: "40 mm", unit: "m", stock: 10 }] });
+    const ok = await call("POST", `/sync/stock?projectId=${wtId}`, owner, { upserts: [{ trade: "Plumbing", family: "Pipe", item: "Pipe", material: "PVC", size: "40 mm", unit: "m", stock: 10 }] });
     assert.equal(ok.json.results[0].ok, true);
     assert.equal(ok.json.results[0].id, PIPE_KEY);
 
-    const rate = await call("POST", "/sync/rates", owner, { upserts: [{ id: "Plumbing::Pipe::Pipe::PVC", materialRate: 70, labourRate: 13 }] });
+    const rate = await call("POST", `/sync/rates?projectId=${wtId}`, owner, { upserts: [{ id: "Plumbing::Pipe::Pipe::PVC", materialRate: 70, labourRate: 13 }] });
     assert.equal(rate.json.results[0].ok, true);
-    const rates = await call("GET", "/sync/rates", eng1);
+    const rates = await call("GET", `/sync/rates?projectId=${wtId}`, eng1);
     assert.deepEqual(rates.json.items, [{ id: "Plumbing::Pipe::Pipe::PVC", materialRate: 70, labourRate: 13 }]);
+  });
+
+  test("stock and rates belong to one project — another project starts empty", async () => {
+    const other = await call("POST", "/projects", owner, { name: "Isolation Site" });
+    assert.equal(other.status, 200, JSON.stringify(other.json));
+    const oid = other.json.id;
+    assert.deepEqual((await call("GET", `/sync/stock?projectId=${oid}`, eng1)).json.items, []);
+    assert.deepEqual((await call("GET", `/sync/rates?projectId=${oid}`, eng1)).json.items, []);
+    assert.ok((await call("GET", `/sync/stock?projectId=${wtId}`, eng1)).json.items.length > 0);
+    assert.equal((await call("GET", "/sync/stock", eng1)).status, 400);
+    assert.equal((await call("GET", "/sync/stock?projectId=nope", eng1)).status, 404);
   });
 
   test("stock lines keep a unit price; a doc without price leaves it alone", async () => {
     const key = "Plumbing|Pipe|CPVC|25 mm||";
     const base = { trade: "Plumbing", family: "Pipe", item: "Pipe", material: "CPVC", size: "25 mm", unit: "m" };
-    const find = async () => (await call("GET", "/sync/stock", eng1)).json.items.find((s: J) => s.key === key);
+    const find = async () => (await call("GET", `/sync/stock?projectId=${wtId}`, eng1)).json.items.find((s: J) => s.key === key);
 
-    assert.equal((await call("POST", "/sync/stock", owner, { upserts: [{ ...base, stock: 5 }] })).json.results[0].ok, true);
+    assert.equal((await call("POST", `/sync/stock?projectId=${wtId}`, owner, { upserts: [{ ...base, stock: 5 }] })).json.results[0].ok, true);
     assert.equal((await find()).price, 0);
 
-    assert.equal((await call("POST", "/sync/stock", owner, { upserts: [{ ...base, stock: 5, price: 1250.5 }] })).json.results[0].ok, true);
+    assert.equal((await call("POST", `/sync/stock?projectId=${wtId}`, owner, { upserts: [{ ...base, stock: 5, price: 1250.5 }] })).json.results[0].ok, true);
     assert.equal((await find()).price, 1250.5);
 
     // older app build: no price field → price kept, stock updated
-    await call("POST", "/sync/stock", owner, { upserts: [{ ...base, stock: 8 }] });
+    await call("POST", `/sync/stock?projectId=${wtId}`, owner, { upserts: [{ ...base, stock: 8 }] });
     const kept = await find();
     assert.equal(kept.price, 1250.5);
     assert.equal(kept.stock, 8);
 
-    const neg = await call("POST", "/sync/stock", owner, { upserts: [{ ...base, stock: 8, price: -1 }] });
+    const neg = await call("POST", `/sync/stock?projectId=${wtId}`, owner, { upserts: [{ ...base, stock: 8, price: -1 }] });
     assert.equal(neg.json.results[0].ok, false);
-    await call("POST", "/sync/stock", owner, { deletes: [key] });
+    await call("POST", `/sync/stock?projectId=${wtId}`, owner, { deletes: [key] });
   });
 
   test("catalog: default is version 0, admins publish new versions", async () => {
@@ -198,7 +216,7 @@ describe("projects", () => {
     const bad = await call("POST", "/projects", eng1, { name: "Whitefield Tower" });
     assert.equal(bad.status, 403);
 
-    const ok = await call("POST", "/projects", owner, { name: "Whitefield Tower", siteName: "Whitefield, Bengaluru" });
+    const ok = await call("POST", "/projects", owner, { name: "Marathahalli Block", siteName: "Marathahalli, Bengaluru" });
     assert.equal(ok.status, 200, JSON.stringify(ok.json));
     assert.equal(ok.json.status, "open");
 
@@ -232,7 +250,7 @@ describe("mto workflow", () => {
   });
 
   test("no stock check at MTO time — any item, any quantity goes straight in", async () => {
-    const stock = (await call("GET", "/sync/stock", eng2)).json.items.find((s: J) => s.key === PIPE_KEY);
+    const stock = (await call("GET", `/sync/stock?projectId=${wtId}`, eng2)).json.items.find((s: J) => s.key === PIPE_KEY);
     assert.equal(stock.stock, 10);
     const big = await call("POST", "/sync/estimates", eng2, { upserts: [estimate("e2-b", projectId, 999)] });
     assert.equal(big.json.results[0].ok, true, JSON.stringify(big.json));
@@ -331,7 +349,7 @@ describe("mto workflow", () => {
       ws.on("message", (m) => {
         const msg = JSON.parse(String(m));
         got.push(msg);
-        if (msg.type === "hello") call("POST", "/sync/stock", owner, { upserts: [{ trade: "Plumbing", family: "Pipe", item: "Pipe", material: "PVC", size: "40 mm", unit: "m", stock: 50 }] });
+        if (msg.type === "hello") call("POST", `/sync/stock?projectId=${wtId}`, owner, { upserts: [{ trade: "Plumbing", family: "Pipe", item: "Pipe", material: "PVC", size: "40 mm", unit: "m", stock: 50 }] });
         if (msg.type === "changed" && msg.resource === "stock") res();
       });
       ws.on("error", rej);
@@ -381,7 +399,7 @@ describe("mto workflow", () => {
   });
 
   test("bad token is refused", async () => {
-    assert.equal((await call("GET", "/sync/stock", "nope")).status, 401);
+    assert.equal((await call("GET", `/sync/stock?projectId=${wtId}`, "nope")).status, 401);
   });
 });
 
@@ -431,7 +449,7 @@ describe("procurement + stock ledger (Phase 3)", () => {
   });
 
   test("issue from stock lowers onHand and creates a movement", async () => {
-    const stockBefore = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+    const stockBefore = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
 
     const r = await call("POST", "/mtos/e1-a/procurement", procurement, {
       lines: [{ lineId: "e1-a-l1", issueQty: 3, purchaseQty: 0 }],
@@ -439,52 +457,53 @@ describe("procurement + stock ledger (Phase 3)", () => {
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(r.json.lines[0].issuedQty, 3);
 
-    const stockAfter = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+    const stockAfter = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
     assert.equal(stockAfter, stockBefore - 3);
 
-    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}`, owner);
+    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}&projectId=${wtId}`, owner);
     assert.ok(movements.json.some((m: J) => m.type === "ISSUE" && m.qty === 3));
   });
 
   test("receive purchased items raises onHand", async () => {
-    const stockBefore = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+    const stockBefore = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
 
     const r = await call("POST", "/stock/receipts", procurement, {
+      projectId: wtId,
       lines: [{ stockLineId: PIPE_KEY, qty: 10, estimateId: "e1-a" }],
     });
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(r.json.receipts[0].qty, 10);
 
-    const stockAfter = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+    const stockAfter = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
     assert.equal(stockAfter, stockBefore + 10);
 
-    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}`, owner);
+    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}&projectId=${wtId}`, owner);
     assert.ok(movements.json.some((m: J) => m.type === "RECEIPT" && m.qty === 10));
   });
 
   test("manual adjust with reason changes stock", async () => {
-    const stockBefore = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+    const stockBefore = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
 
     const r = await call("POST", "/stock/adjust", procurement, {
-      stockLineId: PIPE_KEY, qty: -5, reason: "Damaged pipes removed",
+      projectId: wtId, stockLineId: PIPE_KEY, qty: -5, reason: "Damaged pipes removed",
     });
     assert.equal(r.status, 200, JSON.stringify(r.json));
 
-    const stockAfter = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+    const stockAfter = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
     assert.equal(stockAfter, stockBefore - 5);
 
-    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}`, owner);
+    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}&projectId=${wtId}`, owner);
     assert.ok(movements.json.some((m: J) => m.type === "ADJUST" && m.reason === "Damaged pipes removed"));
   });
 
   test("adjust without reason is refused", async () => {
-    const r = await call("POST", "/stock/adjust", procurement, { stockLineId: PIPE_KEY, qty: 1 });
+    const r = await call("POST", "/stock/adjust", procurement, { projectId: wtId, stockLineId: PIPE_KEY, qty: 1 });
     assert.equal(r.status, 400);
   });
 
   test("adjust that would push stock below zero is refused", async () => {
-    const stock = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
-    const r = await call("POST", "/stock/adjust", procurement, { stockLineId: PIPE_KEY, qty: -(stock + 999), reason: "test" });
+    const stock = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY).stock;
+    const r = await call("POST", "/stock/adjust", procurement, { projectId: wtId, stockLineId: PIPE_KEY, qty: -(stock + 999), reason: "test" });
     assert.equal(r.status, 400);
     assert.match(r.json.error, /below zero/);
   });
@@ -530,7 +549,7 @@ describe("logistics + cancel (Phase 4)", () => {
     await call("GET", "/me", logistics); // accept invite
 
     projectId = (await call("GET", "/projects", owner)).json.find((p: J) => p.name === "Whitefield Tower").id;
-    stockBefore = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+    stockBefore = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
   });
 
   test("logistics moves READY_TO_DISPATCH → DISPATCHED via dispatch sheet", async () => {
@@ -564,17 +583,17 @@ describe("logistics + cancel (Phase 4)", () => {
   });
 
   test("cancel after delivery returns all issued qty to stock immediately", async () => {
-    const stockMid = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+    const stockMid = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
 
     // PM cancels the delivered MTO — should RETURN all issued qty (10 m for e1-d)
     const cancel = await call("POST", "/mtos/e1-d/transition", pm, { to: "CANCELLED", comment: "Site plan changed." });
     assert.equal(cancel.status, 200, JSON.stringify(cancel.json));
     assert.equal(cancel.json.item.status, "CANCELLED");
 
-    const stockAfter = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+    const stockAfter = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
     assert.equal(stockAfter, stockMid + 10, `Expected stock +10, got ${stockAfter - stockMid}`);
 
-    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}`, owner);
+    const movements = await call("GET", `/stock/movements?stockLineId=${PIPE_KEY}&projectId=${wtId}`, owner);
     assert.ok(movements.json.some((mv: J) => mv.type === "RETURN" && mv.estimateId === "e1-d"));
   });
 
@@ -590,13 +609,26 @@ describe("logistics + cancel (Phase 4)", () => {
   });
 
   test("cancel at APPROVED (no stock issued) makes no RETURN movements", async () => {
-    const stockSnapshot = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+    const stockSnapshot = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
 
     const cancel = await call("POST", "/mtos/e1-e/transition", pm, { to: "CANCELLED", comment: "Not needed." });
     assert.equal(cancel.status, 200);
 
-    const stockAfter = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+    const stockAfter = (await call("GET", `/sync/stock?projectId=${wtId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
     assert.equal(stockAfter, stockSnapshot); // no change
+  });
+
+  test("READY_TO_DISPATCH → DELIVERED directly, no dispatch details", async () => {
+    await call("POST", "/sync/estimates", eng1, { upserts: [estimate("e1-g", projectId, 1)] });
+    await call("POST", "/mtos/e1-g/transition", eng1, { to: "SUBMITTED" });
+    await call("POST", "/mtos/e1-g/transition", pm, { to: "APPROVED" });
+    await call("POST", "/mtos/e1-g/transition", finance, { to: "BUDGET_OK" });
+    await call("POST", "/mtos/e1-g/procurement", owner, { lines: [{ lineId: "e1-g-l1", issueQty: 1, purchaseQty: 0 }] });
+    await call("POST", "/mtos/e1-g/transition", owner, { to: "READY_TO_DISPATCH" });
+
+    const r = await call("POST", "/mtos/e1-g/transition", logistics, { to: "DELIVERED" });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.item.status, "DELIVERED");
   });
 
   test("dispatch record can be patched and fetched", async () => {
@@ -635,7 +667,7 @@ describe("site consumption + project close (Phase 5)", () => {
     projectId = proj.json.id;
 
     // Ensure enough stock (add 200 m so we don't run out across tests)
-    await call("POST", "/stock/receipts", owner, { lines: [{ stockLineId: PIPE_KEY, qty: 200 }] });
+    await call("POST", "/stock/receipts", owner, { projectId, lines: [{ stockLineId: PIPE_KEY, qty: 200 }] });
 
     // Create and fully dispatch an MTO with 100 m
     await call("POST", "/sync/estimates", eng1, { upserts: [estimate("p5-a", projectId, 100)] });
@@ -713,6 +745,30 @@ describe("site consumption + project close (Phase 5)", () => {
     assert.ok(r.json.some((e: J) => e.kind === "WASTED" && e.qty === 5));
   });
 
+  test("closing one MTO records its leftover as returned automatically", async () => {
+    await call("POST", "/sync/estimates", eng1, { upserts: [estimate("p5-c", projectId, 10)] });
+    await call("POST", "/mtos/p5-c/transition", eng1, { to: "SUBMITTED" });
+    await call("POST", "/mtos/p5-c/transition", pm, { to: "APPROVED" });
+    await call("POST", "/mtos/p5-c/transition", finance, { to: "BUDGET_OK" });
+    await call("POST", "/mtos/p5-c/procurement", owner, { lines: [{ lineId: "p5-c-l1", issueQty: 10, purchaseQty: 0 }] });
+    await call("POST", "/mtos/p5-c/transition", owner, { to: "READY_TO_DISPATCH" });
+    assert.equal((await call("POST", "/mtos/p5-c/transition", owner, { to: "DELIVERED" })).status, 200);
+
+    const siteBal = async () => (await call("GET", `/projects/${projectId}/site-balance`, eng1)).json.find((b: J) => b.stockKey === PIPE_KEY).balance;
+    const siteBefore = await siteBal();
+    const r = await call("POST", "/mtos/p5-c/transition", pm, { to: "CLOSED" });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(await siteBal(), siteBefore - 10);
+
+    const history = await call("GET", "/stock/returns", eng1);
+    assert.equal(history.status, 200);
+    const row = history.json.find((h: J) => h.estimateId === "p5-c");
+    assert.ok(row, JSON.stringify(history.json));
+    assert.equal(row.qty, 10);
+    assert.equal(row.projectName, "Phase5 Site");
+    assert.match(row.estimateNumber, /^MTO-/);
+  });
+
   test("blocking MTOs prevent project close", async () => {
     // Add a SUBMITTED MTO to the project
     await call("POST", "/sync/estimates", eng1, { upserts: [estimate("p5-b", projectId, 1)] });
@@ -723,19 +779,24 @@ describe("site consumption + project close (Phase 5)", () => {
     assert.match(r.json.error, /SUBMITTED/i);
   });
 
-  test("project close returns balance to stock and marks MTOs CLOSED", async () => {
+  test("project close records the balance as returned and marks MTOs CLOSED", async () => {
     // Cancel the blocking MTO first
     await call("POST", "/mtos/p5-b/transition", pm, { to: "CANCELLED", comment: "Clearing for close test" });
 
-    const stockBefore = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+    const projectStockBefore = (await call("GET", `/sync/stock?projectId=${projectId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
 
-    // Close the project — balance is 45 m (100 - 50 used - 5 wasted)
+    // Close the project — balance is 45 m (100 - 50 used - 5 wasted); p5-c already went back when it closed
     const r = await call("POST", `/projects/${projectId}/close`, pm);
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.ok(r.json.returned.some((ret: J) => ret.stockKey === PIPE_KEY && ret.qty === 45));
 
-    const stockAfter = (await call("GET", "/sync/stock", owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
-    assert.equal(stockAfter, stockBefore + 45, `Expected stock +45, got ${stockAfter - stockBefore}`);
+    // The project's own store is untouched
+    const projectStockAfter = (await call("GET", `/sync/stock?projectId=${projectId}`, owner)).json.items.find((s: J) => s.key === PIPE_KEY)?.stock ?? 0;
+    assert.equal(projectStockAfter, projectStockBefore);
+
+    // The closed project lists what it sent back
+    const returns = await call("GET", `/projects/${projectId}/returns`, pm);
+    assert.ok(returns.json.some((ret: J) => ret.stockKey === PIPE_KEY && ret.qty === 45));
 
     // Wastage (5 m) is NOT returned
     assert.ok(!r.json.returned.some((ret: J) => ret.qty === 5));

@@ -1,11 +1,9 @@
-// The MTO (material take-off / material request) workflow — Sept 2026 rebuild.
+// The MTO (material take-off / material request) workflow.
 // See XMTO_BUILD_BRIEF.md section 5 for the full table this file encodes.
 //
-// Phase 1 wires the approval loop only (Draft → Submitted → Approved/Rejected → Budget OK /
-// Sent back). Ready to dispatch, Dispatched, Delivered, In use, Closed and Cancelled exist as
-// values so History/inbox code and the schema are ready for them, but nothing can reach them
-// yet — later phases (procurement, logistics, site use) add the transitions that do.
-import type { Role } from "../db.js";
+// Every move needs one permission (see lib/permissions.ts). Which people hold it is up to the
+// company: roles are defined per organisation and handed out per project.
+import type { Permission } from "./permissions.js";
 
 export const MTO_STATUSES = [
   "DRAFT",
@@ -31,83 +29,73 @@ export function isMtoStatus(v: unknown): v is MtoStatus {
 export interface TransitionRule {
   from: MtoStatus;
   to: MtoStatus;
-  roles: Role[]; // any one of these roles (after admin/owner expansion) allows the move
+  perm: Permission; // the permission that allows this move
   commentRequired?: boolean;
   requireOwnMto?: boolean; // the caller must have created the MTO, unless they're owner/admin
 }
 
-// Full workflow: approval loop (Phase 1), procurement (Phase 3), logistics + cancel (Phase 4).
+// Full workflow: approval loop, procurement, logistics, cancel and close.
 export const TRANSITIONS: TransitionRule[] = [
   // Approval loop
-  { from: "DRAFT",              to: "SUBMITTED",         roles: ["site_supervisor"], requireOwnMto: true },
-  { from: "SUBMITTED",          to: "APPROVED",          roles: ["project_manager"] },
-  { from: "SUBMITTED",          to: "REJECTED",          roles: ["project_manager"], commentRequired: true },
-  { from: "REJECTED",           to: "SUBMITTED",         roles: ["site_supervisor"], requireOwnMto: true },
-  { from: "APPROVED",           to: "BUDGET_OK",         roles: ["finance"] },
-  { from: "APPROVED",           to: "SENT_BACK",         roles: ["finance"], commentRequired: true },
-  { from: "SENT_BACK",          to: "APPROVED",          roles: ["project_manager"] },
-  { from: "SENT_BACK",          to: "REJECTED",          roles: ["project_manager"], commentRequired: true },
-  // Phase 3: procurement
-  { from: "BUDGET_OK",          to: "READY_TO_DISPATCH", roles: ["procurement"] },
-  // Phase 4: logistics
-  { from: "READY_TO_DISPATCH",  to: "DISPATCHED",        roles: ["logistics"] },
-  { from: "DISPATCHED",         to: "DELIVERED",         roles: ["logistics", "site_supervisor"] },
-  // Phase 4: cancel (PM or Admin; comment always required; stock return happens in the endpoint)
-  { from: "APPROVED",           to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
-  { from: "BUDGET_OK",          to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
-  { from: "SENT_BACK",          to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
-  { from: "READY_TO_DISPATCH",  to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
-  { from: "DISPATCHED",         to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
-  { from: "DELIVERED",          to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
-  { from: "IN_USE",             to: "CANCELLED",         roles: ["project_manager"], commentRequired: true },
+  { from: "DRAFT",              to: "SUBMITTED",         perm: "mto.submit", requireOwnMto: true },
+  { from: "SUBMITTED",          to: "APPROVED",          perm: "mto.approve" },
+  { from: "SUBMITTED",          to: "REJECTED",          perm: "mto.approve", commentRequired: true },
+  { from: "REJECTED",           to: "SUBMITTED",         perm: "mto.submit", requireOwnMto: true },
+  { from: "APPROVED",           to: "BUDGET_OK",         perm: "mto.budget" },
+  { from: "APPROVED",           to: "SENT_BACK",         perm: "mto.budget", commentRequired: true },
+  { from: "SENT_BACK",          to: "APPROVED",          perm: "mto.approve" },
+  { from: "SENT_BACK",          to: "REJECTED",          perm: "mto.approve", commentRequired: true },
+  // Procurement, logistics
+  { from: "BUDGET_OK",          to: "READY_TO_DISPATCH", perm: "mto.procure" },
+  { from: "READY_TO_DISPATCH",  to: "DELIVERED",         perm: "mto.deliver" },
+  { from: "READY_TO_DISPATCH",  to: "DISPATCHED",        perm: "mto.dispatch" },
+  { from: "DISPATCHED",         to: "DELIVERED",         perm: "mto.deliver" },
+  // Cancel (stock is returned)
+  { from: "APPROVED",           to: "CANCELLED",         perm: "mto.cancel", commentRequired: true },
+  { from: "BUDGET_OK",          to: "CANCELLED",         perm: "mto.cancel", commentRequired: true },
+  { from: "SENT_BACK",          to: "CANCELLED",         perm: "mto.cancel", commentRequired: true },
+  { from: "READY_TO_DISPATCH",  to: "CANCELLED",         perm: "mto.cancel", commentRequired: true },
+  { from: "DISPATCHED",         to: "CANCELLED",         perm: "mto.cancel", commentRequired: true },
+  // Closing an MTO records its unused material as returned (done in the transition).
+  { from: "DELIVERED",          to: "CLOSED",            perm: "mto.close" },
+  { from: "IN_USE",             to: "CLOSED",            perm: "mto.close" },
+  { from: "DELIVERED",          to: "CANCELLED",         perm: "mto.cancel", commentRequired: true },
+  { from: "IN_USE",             to: "CANCELLED",         perm: "mto.cancel", commentRequired: true },
 ];
-
-// A member's roles, expanded the way the brief's role table describes: Owner can do anything;
-// Admin can do anything a Project Manager can do (on top of their own admin-only actions).
-export function effectiveRoles(roles: Role[]): Set<Role> {
-  const set = new Set(roles);
-  if (set.has("owner")) {
-    return new Set<Role>(["owner", "admin", "project_manager", "finance", "procurement", "logistics", "site_supervisor", "viewer"]);
-  }
-  if (set.has("admin")) set.add("project_manager");
-  return set;
-}
 
 export function findTransition(from: string, to: string): TransitionRule | undefined {
   return TRANSITIONS.find((r) => r.from === from && r.to === to);
 }
 
-export function canPerform(memberRoles: Role[], rule: TransitionRule): boolean {
-  const eff = effectiveRoles(memberRoles);
-  return rule.roles.some((r) => eff.has(r));
+export function canPerform(perms: ReadonlySet<string>, rule: TransitionRule): boolean {
+  return perms.has(rule.perm);
 }
 
-// Which statuses are "waiting" on at least one of these roles to act (used by the Inbox).
+// Which statuses are "waiting" on someone holding a permission (used by the Inbox).
 // Rejected isn't listed here — it waits on the MTO's own creator, handled separately.
-const WAITING_ON: Partial<Record<MtoStatus, Role[]>> = {
-  SUBMITTED:        ["project_manager"],
-  APPROVED:         ["finance"],
-  SENT_BACK:        ["project_manager"],
-  BUDGET_OK:        ["procurement"],      // Phase 3: procurement sees it
-  READY_TO_DISPATCH:["logistics"],        // Phase 4: logistics picks it up
+const WAITING_ON: Partial<Record<MtoStatus, Permission>> = {
+  SUBMITTED:         "mto.approve",
+  APPROVED:          "mto.budget",
+  SENT_BACK:         "mto.approve",
+  BUDGET_OK:         "mto.procure",
+  READY_TO_DISPATCH: "mto.dispatch",
 };
 
-export function statusesWaitingOnRoles(roles: Role[]): MtoStatus[] {
-  const eff = effectiveRoles(roles);
-  return (Object.keys(WAITING_ON) as MtoStatus[]).filter((status) => WAITING_ON[status]!.some((r) => eff.has(r)));
+export function statusesWaitingOnPerms(perms: ReadonlySet<string>): MtoStatus[] {
+  return (Object.keys(WAITING_ON) as MtoStatus[]).filter((status) => perms.has(WAITING_ON[status]!));
 }
 
 export const STATUSES_WAITING_ON_CREATOR: MtoStatus[] = ["REJECTED"];
 
-// Phase 2: who to email when an MTO reaches each status.
-// "creator" means the person who made the MTO (site_supervisor).
-export const NOTIFY_ON_REACH: Partial<Record<MtoStatus, Array<Role | "creator">>> = {
-  SUBMITTED:        ["project_manager"],
-  REJECTED:         ["creator"],
-  APPROVED:         ["finance"],
-  SENT_BACK:        ["project_manager"],
-  BUDGET_OK:        ["procurement"],
-  READY_TO_DISPATCH:["logistics"],
-  DELIVERED:        ["creator", "project_manager"],
-  CANCELLED:        ["owner", "admin", "project_manager", "finance", "procurement", "logistics", "site_supervisor"],
+// Who to email when an MTO reaches each status: whoever holds the permission on that MTO's
+// project (plus owner/admin), the MTO's creator, or everyone on the project.
+export const NOTIFY_ON_REACH: Partial<Record<MtoStatus, Array<Permission | "creator" | "everyone">>> = {
+  SUBMITTED:         ["mto.approve"],
+  REJECTED:          ["creator"],
+  APPROVED:          ["mto.budget"],
+  SENT_BACK:         ["mto.approve"],
+  BUDGET_OK:         ["mto.procure"],
+  READY_TO_DISPATCH: ["mto.dispatch"],
+  DELIVERED:         ["creator", "mto.approve"],
+  CANCELLED:         ["everyone"],
 };

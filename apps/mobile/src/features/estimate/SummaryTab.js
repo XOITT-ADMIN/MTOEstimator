@@ -89,7 +89,7 @@ export function SummaryTab({ estimate, breakdown: b, update, canEdit }) {
                 <Chip key={p} label={`${p}%`} active={tax.percent === p} onPress={() => setTax({ percent: p })} style={{ height: 40, paddingHorizontal: 12 }} />
               ))}
             </View>
-            <Segmented options={[{ key: "added", label: "Added on top" }, { key: "included", label: "Included in rates" }]} value={tax.mode} onChange={(m) => setTax({ mode: m })} size="l" />
+            <Segmented options={[{ key: "added", label: "Added on top" }, { key: "included", label: "Included in budget rates" }]} value={tax.mode} onChange={(m) => setTax({ mode: m })} size="l" />
           </View>
         ) : null}
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8, paddingTop: 10, borderTopWidth: 2, borderTopColor: colors.navy }}>

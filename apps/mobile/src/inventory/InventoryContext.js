@@ -2,6 +2,7 @@ import React, { createContext, useContext, useMemo, useCallback, useState } from
 
 import { useLocalCollection } from "../storage/useLocalCollection";
 import { useCompany, useCompanyRemote } from "../context/CompanyContext";
+import { useProjects } from "../context/ProjectsContext";
 import { findItem } from "../data/catalog";
 import { stockKey, buildStockCsv, parseStockCsv } from "./stockCsv";
 
@@ -33,7 +34,9 @@ function seedStock() {
 }
 
 export function InventoryProvider({ children }) {
-  const remote = useCompanyRemote("stock");
+  // Stock is kept per project: this is the stock of whichever project is in scope right now.
+  const { scopeProjectId } = useProjects();
+  const remote = useCompanyRemote("stock", { projectId: scopeProjectId });
   const { canManageLibrary } = useCompany();
   const { items: stock, loaded, apply: applyStock, syncError: collectionError, clearSyncError: clearCollectionError } = useLocalCollection({
     localKey: STORAGE_KEY,

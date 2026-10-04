@@ -131,15 +131,15 @@ export function QtyStep({ w }) {
         ) : null}
       </Section>
 
-      <Section title="Rates" style={{ marginTop: 0 }} gap={8}>
+      <Section title="Budget rates" style={{ marginTop: 0 }} gap={8}>
         <View style={{ flexDirection: "row", gap: 10 }}>
-          <MoneyField label="Material" value={w.materialRate} onChangeText={w.setMaterialRate} unit={w.unit} />
-          <MoneyField label="Labour" value={w.labourRate} onChangeText={w.setLabourRate} unit={w.unit} />
+          <MoneyField label="Material (budget)" value={w.materialRate} onChangeText={w.setMaterialRate} unit={w.unit} />
+          <MoneyField label="Labour (indicative)" value={w.labourRate} onChangeText={w.setLabourRate} unit={w.unit} />
         </View>
         <HStack gap={6}>
           <Icon name={w.rateTouched ? "tag" : "info"} size={14} color="muted" />
           <T variant="caption" weight={400}>
-            {w.rateTouched ? "Your rate for this estimate — the library stays the same" : "Pre-filled from your company library"}
+            {w.rateTouched ? "Your budget for this MTO — the library stays the same" : "Budgetary figures, pre-filled from your library"}
           </T>
         </HStack>
       </Section>

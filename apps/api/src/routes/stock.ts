@@ -2,7 +2,8 @@ import { findItem } from "@mto/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
-import { requireMember } from "../lib/access.js";
+import { hasPerm, isOrgAdmin, requireMember, type Member } from "../lib/access.js";
+import type { Permission } from "../lib/permissions.js";
 import { badRequest, forbidden, notFound } from "../lib/errors.js";
 import { toNum } from "../lib/num.js";
 import type { Deps } from "../app.js";
@@ -15,6 +16,7 @@ function parseStockKey(key: string) {
 }
 
 const receiptsSchema = z.object({
+  projectId: z.string().min(1, "Pick a project."),
   lines: z.array(
     z.object({
       stockLineId: z.string().min(1),
@@ -25,6 +27,7 @@ const receiptsSchema = z.object({
 });
 
 const adjustSchema = z.object({
+  projectId:   z.string().min(1, "Pick a project."),
   stockLineId: z.string().min(1),
   qty:         z.number(), // signed: positive = stock up, negative = stock down
   reason:      z.string().trim().min(1, "Reason is required for a stock adjustment."),
@@ -33,15 +36,25 @@ const adjustSchema = z.object({
 export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
   const auth = { onRequest: [app.authenticate] };
 
-  const isProcurement = (roles: string[]) =>
-    roles.includes("procurement") || roles.includes("owner") || roles.includes("admin");
+  // Stock is kept per project — the project must be one of this company's.
+  const requireProject = async (companyId: string, projectId: string) => {
+    const project = await db.project.findUnique({ where: { id: projectId }, select: { companyId: true } });
+    if (!project || project.companyId !== companyId) throw notFound("Project not found.");
+    return projectId;
+  };
+
+  // Roles are per project: what a role allows on one project says nothing about another.
+  const allowed = (m: Member, projectId: string, perm: Permission) => hasPerm(m, projectId, perm);
+  // Projects this person may see stock for (owner/admin: all, i.e. null).
+  const visibleProjects = (m: Member): string[] | null => (isOrgAdmin(m) ? null : Object.keys(m.projectRoles));
 
   // Receive purchased items into stock. Bought items always go through stock (RECEIPT first,
   // then ISSUE), never straight to site. See XMTO_BUILD_BRIEF.md section 6.
   app.post("/stock/receipts", auth, async (req) => {
     const m = await requireMember(db, req);
-    if (!isProcurement(m.roles)) throw forbidden("Only Procurement, Admin or Owner can receive stock.");
     const body = receiptsSchema.parse(req.body);
+    body.projectId = await requireProject(m.companyId, body.projectId);
+    if (!allowed(m, body.projectId, "stock.in")) throw forbidden("Your role on this project can't stock in purchases.");
 
     const movements = await db.$transaction(async (tx) => {
       const created: { stockLineId: string; qty: number; newOnHand: number }[] = [];
@@ -49,7 +62,7 @@ export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
       for (const entry of body.lines) {
         const stockRows = await tx.$queryRaw<{ key: string; onHand: string }[]>`
           SELECT "key", "onHand" FROM "StockLine"
-          WHERE "companyId" = ${m.companyId} AND "key" = ${entry.stockLineId} FOR UPDATE`;
+          WHERE "companyId" = ${m.companyId} AND "projectId" = ${body.projectId} AND "key" = ${entry.stockLineId} FOR UPDATE`;
         let stock = stockRows[0];
 
         // Nothing in the library under this key yet (e.g. an MTO item that was never added to
@@ -61,6 +74,7 @@ export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
           await tx.stockLine.create({
             data: {
               companyId: m.companyId,
+              projectId: body.projectId,
               key: entry.stockLineId,
               trade: parsed.trade,
               family: found?.family ?? "",
@@ -78,11 +92,12 @@ export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
 
         await tx.$executeRaw`
           UPDATE "StockLine" SET "onHand" = "onHand" + ${entry.qty}
-          WHERE "companyId" = ${m.companyId} AND "key" = ${entry.stockLineId}`;
+          WHERE "companyId" = ${m.companyId} AND "projectId" = ${body.projectId} AND "key" = ${entry.stockLineId}`;
 
         await tx.stockMovement.create({
           data: {
             companyId:   m.companyId,
+            projectId:   body.projectId,
             stockLineId: entry.stockLineId,
             type:        "RECEIPT",
             qty:         entry.qty,
@@ -112,13 +127,20 @@ export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
   // this is the list that closes that loop.
   app.get("/stock/pending-purchases", auth, async (req) => {
     const m = await requireMember(db, req);
-    if (!isProcurement(m.roles)) throw forbidden("Only Procurement, Admin or Owner can see pending purchases.");
+    const qs = req.query as { projectId?: string };
+    if (qs.projectId) {
+      await requireProject(m.companyId, qs.projectId);
+      if (!allowed(m, qs.projectId, "stock.in")) throw forbidden("Your role on this project can't see pending purchases.");
+    }
+    // Without a project: every project this person does procurement on.
+    const procurementProjects = isOrgAdmin(m) ? null : Object.keys(m.projectRoles).filter((pid) => allowed(m, pid, "stock.in"));
+    if (!qs.projectId && procurementProjects && !procurementProjects.length) throw forbidden("Your roles don't allow seeing pending purchases.");
 
     const lines = await db.estimateLine.findMany({
       where: {
         companyId: m.companyId,
         purchasedQty: { gt: 0 },
-        estimate: { status: { in: ["BUDGET_OK", "READY_TO_DISPATCH"] } },
+        estimate: { status: { in: ["BUDGET_OK", "READY_TO_DISPATCH"] }, ...(qs.projectId ? { projectId: qs.projectId } : procurementProjects ? { projectId: { in: procurementProjects } } : {}) },
       },
       select: {
         lineId: true,
@@ -126,36 +148,49 @@ export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
         qty: true,
         issuedQty: true,
         purchasedQty: true,
-        estimate: { select: { id: true, estimateNumber: true, name: true } },
+        estimate: { select: { id: true, estimateNumber: true, name: true, projectId: true } },
       },
     });
 
-    const byKey = new Map<string, { stockKey: string; pending: number; mtos: { estimateId: string; estimateNumber: string; name: string; lineId: string; pending: number }[] }>();
+    // Grouped per project + stockKey: each project has its own store, so demand is never pooled across them.
+    const byKey = new Map<string, { projectId: string; stockKey: string; pending: number; mtos: { estimateId: string; estimateNumber: string; name: string; lineId: string; pending: number }[] }>();
     for (const l of lines) {
       const pending = Math.round(Math.max(0, Math.min(toNum(l.purchasedQty), toNum(l.qty) - toNum(l.issuedQty))) * 100) / 100;
       if (pending <= 0) continue;
-      const cur = byKey.get(l.stockKey) ?? { stockKey: l.stockKey, pending: 0, mtos: [] };
+      const groupKey = `${l.estimate.projectId}::${l.stockKey}`;
+      const cur = byKey.get(groupKey) ?? { projectId: l.estimate.projectId, stockKey: l.stockKey, pending: 0, mtos: [] };
       cur.pending = Math.round((cur.pending + pending) * 100) / 100;
       cur.mtos.push({ estimateId: l.estimate.id, estimateNumber: l.estimate.estimateNumber, name: l.estimate.name, lineId: l.lineId, pending });
-      byKey.set(l.stockKey, cur);
+      byKey.set(groupKey, cur);
     }
 
-    const keys = Array.from(byKey.keys());
-    const stockLines = keys.length
-      ? await db.stockLine.findMany({ where: { companyId: m.companyId, key: { in: keys } } })
+    const groups = Array.from(byKey.values());
+    const stockLines = groups.length
+      ? await db.stockLine.findMany({
+          where: { companyId: m.companyId, OR: groups.map((g) => ({ projectId: g.projectId, key: g.stockKey })) },
+        })
       : [];
-    const stockByKey = new Map(stockLines.map((s) => [s.key, s]));
+    const stockByKey = new Map(stockLines.map((s) => [`${s.projectId}::${s.key}`, s]));
 
-    return Array.from(byKey.values())
+    const projects = groups.length
+      ? await db.project.findMany({ where: { companyId: m.companyId, id: { in: [...new Set(groups.map((g) => g.projectId))] } }, select: { id: true, name: true } })
+      : [];
+    const projectName = new Map(projects.map((p) => [p.id, p.name]));
+
+    return groups
       .map((row) => {
-        const sl = stockByKey.get(row.stockKey);
+        const sl = stockByKey.get(`${row.projectId}::${row.stockKey}`);
+        // No stock line in this project yet (nothing received here) → describe it from its key.
+        const k = parseStockKey(row.stockKey);
         return {
+          projectId: row.projectId,
+          projectName: projectName.get(row.projectId) ?? "",
           stockKey: row.stockKey,
-          trade: sl?.trade ?? "",
-          item: sl?.item ?? "",
-          material: sl?.material ?? "",
-          size: sl?.size ?? "",
-          unit: sl?.unit ?? "Nos",
+          trade: sl?.trade ?? k.trade,
+          item: sl?.item ?? k.item,
+          material: sl?.material ?? k.material,
+          size: sl?.size ?? k.size,
+          unit: sl?.unit ?? findItem(k.trade, k.item)?.unit ?? "Nos",
           onHand: sl ? toNum(sl.onHand) : 0,
           pending: row.pending,
           mtos: row.mtos,
@@ -167,13 +202,14 @@ export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
   // Manual stock correction by Procurement or Admin. Reason is always required.
   app.post("/stock/adjust", auth, async (req) => {
     const m = await requireMember(db, req);
-    if (!isProcurement(m.roles)) throw forbidden("Only Procurement, Admin or Owner can adjust stock.");
     const body = adjustSchema.parse(req.body);
+    body.projectId = await requireProject(m.companyId, body.projectId);
+    if (!allowed(m, body.projectId, "stock.adjust")) throw forbidden("Your role on this project can't adjust stock.");
 
     const result = await db.$transaction(async (tx) => {
       const stockRows = await tx.$queryRaw<{ key: string; onHand: string }[]>`
         SELECT "key", "onHand" FROM "StockLine"
-        WHERE "companyId" = ${m.companyId} AND "key" = ${body.stockLineId} FOR UPDATE`;
+        WHERE "companyId" = ${m.companyId} AND "projectId" = ${body.projectId} AND "key" = ${body.stockLineId} FOR UPDATE`;
       const stock = stockRows[0];
       if (!stock) throw notFound(`Stock line "${body.stockLineId}" not found.`);
 
@@ -182,11 +218,12 @@ export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
 
       await tx.$executeRaw`
         UPDATE "StockLine" SET "onHand" = "onHand" + ${body.qty}
-        WHERE "companyId" = ${m.companyId} AND "key" = ${body.stockLineId}`;
+        WHERE "companyId" = ${m.companyId} AND "projectId" = ${body.projectId} AND "key" = ${body.stockLineId}`;
 
       await tx.stockMovement.create({
         data: {
           companyId:   m.companyId,
+          projectId:   body.projectId,
           stockLineId: body.stockLineId,
           type:        "ADJUST",
           qty:         body.qty,
@@ -202,13 +239,47 @@ export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
     return result;
   });
 
+  // Returns report: material returned to a project's stock when an MTO or the whole project is
+  // closed, and from which MTO — newest first.
+  app.get("/stock/returns", auth, async (req) => {
+    const m = await requireMember(db, req);
+    const rows = await db.stockMovement.findMany({
+      where: { companyId: m.companyId, type: "RETURN", sourceProjectId: visibleProjects(m) ? { in: visibleProjects(m)! } : { not: null } },
+      orderBy: { createdAt: "desc" },
+      take: 300,
+    });
+    const projectIds = [...new Set(rows.map((r) => r.sourceProjectId!))];
+    const estimateIds = [...new Set(rows.map((r) => r.estimateId).filter((x): x is string => !!x))];
+    const [projects, estimates] = await Promise.all([
+      projectIds.length ? db.project.findMany({ where: { companyId: m.companyId, id: { in: projectIds } }, select: { id: true, name: true } }) : [],
+      estimateIds.length ? db.estimate.findMany({ where: { companyId: m.companyId, id: { in: estimateIds } }, select: { id: true, estimateNumber: true, name: true } }) : [],
+    ]);
+    const projectName = new Map(projects.map((p) => [p.id, p.name]));
+    const estimateById = new Map(estimates.map((e) => [e.id, e]));
+    return rows.map((r) => ({
+      id: r.id,
+      stockKey: r.stockLineId,
+      qty: toNum(r.qty),
+      at: r.createdAt.getTime(),
+      reason: r.reason,
+      projectId: r.sourceProjectId,
+      projectName: projectName.get(r.sourceProjectId!) ?? "",
+      estimateId: r.estimateId,
+      estimateNumber: r.estimateId ? estimateById.get(r.estimateId)?.estimateNumber ?? "" : "",
+      estimateName: r.estimateId ? estimateById.get(r.estimateId)?.name ?? "" : "",
+    }));
+  });
+
   // Stock ledger: every movement for a given stock line, newest first.
   app.get("/stock/movements", auth, async (req) => {
     const m = await requireMember(db, req);
-    const qs = req.query as { stockLineId?: string; from?: string; to?: string };
+    const qs = req.query as { stockLineId?: string; projectId?: string; from?: string; to?: string };
     if (!qs.stockLineId) throw badRequest("Provide stockLineId.");
+    if (!qs.projectId) throw badRequest("Provide projectId.");
+    const storeId = await requireProject(m.companyId, qs.projectId);
+    if (!isOrgAdmin(m) && !m.projectRoles[qs.projectId]) throw forbidden("You're not on that project.");
 
-    const where: Record<string, unknown> = { companyId: m.companyId, stockLineId: qs.stockLineId };
+    const where: Record<string, unknown> = { companyId: m.companyId, projectId: storeId, stockLineId: qs.stockLineId };
     if (qs.from || qs.to) {
       const createdAt: Record<string, Date> = {};
       if (qs.from) createdAt.gte = new Date(Number(qs.from));
@@ -228,6 +299,7 @@ export async function stockRoutes(app: FastifyInstance, { db, hub }: Deps) {
       qty:         toNum(r.qty),
       estimateId:  r.estimateId,
       projectId:   r.projectId,
+      sourceProjectId: r.sourceProjectId,
       reason:      r.reason,
       createdById: r.createdById,
       at:          r.createdAt.getTime(),

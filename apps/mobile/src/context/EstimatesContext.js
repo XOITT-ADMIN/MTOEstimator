@@ -161,9 +161,10 @@ export function EstimatesProvider({ children }) {
       const nextNumber = estimates.length + 1;
       const newEstimate = {
         id,
-        // With a server this is a placeholder — the API assigns the real, company-wide number.
-        estimateNumber: remote ? "MTO-····" : `MTO-${String(nextNumber).padStart(4, "0")}`,
-        name: data.name || "Untitled MTO",
+        // With a server this is a placeholder — the API assigns the real <project code>-MTO-nnnn
+        // number, and uses it as the name when no title was typed.
+        estimateNumber: remote ? `${data.projectCode ? data.projectCode + "-" : ""}MTO-····` : `MTO-${String(nextNumber).padStart(4, "0")}`,
+        name: data.name || (remote ? `${data.projectCode ? data.projectCode + "-" : ""}MTO-····` : `MTO-${String(nextNumber).padStart(4, "0")}`),
         projectId: data.projectId,
         date: data.date || "",
         trades: data.trades || [],

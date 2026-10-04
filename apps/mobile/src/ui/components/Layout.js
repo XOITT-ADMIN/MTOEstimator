@@ -1,5 +1,5 @@
 import React from "react";
-import { View, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
+import { View, ScrollView, Pressable, KeyboardAvoidingView, Platform, ActivityIndicator } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { colors, sizes } from "../theme";
@@ -9,11 +9,26 @@ import { IconButton } from "./Button";
 // Full-screen page on the canvas background.
 //   <Screen title="Estimates" count={3} right={…} footer={<BottomBar>…</BottomBar>}>…</Screen>
 //   scroll=false when the page manages its own list.
-export function Screen({ children, title, count, subtitle, right, header, footer, scroll = true, tabBar, padded = true, bg = colors.canvas, contentStyle, refreshControl, keyboard }) {
+//   loading=true shows a centered spinner instead of children.
+export function Screen({ children, title, count, subtitle, right, header, footer, scroll = true, tabBar, padded = true, bg = colors.canvas, contentStyle, refreshControl, keyboard, loading }) {
   const insets = useSafeAreaInsets();
   const top = Math.max(insets.top, 12) + 12;
   const head = header ?? (title ? <LargeTitle title={title} count={count} subtitle={subtitle} right={right} /> : null);
   const bottomPad = (tabBar ? sizes.tabBar + 16 : 24) + (footer ? 0 : insets.bottom);
+
+  if (loading) {
+    const Wrap = keyboard ? KeyboardAvoidingView : View;
+    return (
+      <Wrap style={{ flex: 1, backgroundColor: bg }} {...(keyboard ? { behavior: Platform.OS === "ios" ? "padding" : undefined } : {})}>
+        {head ? <View style={{ paddingTop: top, paddingHorizontal: padded ? sizes.screenX : 0 }}>{head}</View> : null}
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+          <ActivityIndicator size="large" color={colors.action} />
+        </View>
+        {footer}
+      </Wrap>
+    );
+  }
+
   const body = scroll ? (
     <ScrollView
       style={{ flex: 1 }}

@@ -14,16 +14,27 @@ datasource db {
   provider = "postgresql"
 }
 
+// Organisation-wide roles. Everything else (site supervisor, finance, …) is an OrgRole below.
 enum Role {
-  owner // created the company; full control, cannot be removed
-  admin // manages library (rates, stock), team; everything a PM can do
-  estimator // retired name for site_supervisor — kept so old rows still parse; migrated on upgrade
-  viewer // read-only
-  site_supervisor // field engineer: creates/submits MTOs, records site use and wastage
-  project_manager // creates/renames/closes projects; approves or rejects MTOs
-  finance // marks an approved MTO Budget OK or sends it back
-  procurement // issues stock / buys for an MTO, receives purchases, dispatch-ready
-  logistics // loading, dispatch and delivery
+  owner // created the company; every permission, cannot be removed
+  admin // every permission; manages the library, team, roles and projects
+}
+
+// A role a company defines (Settings › Roles & permissions): a name and the permissions it holds.
+// Built-in ones are seeded per company; they can be renamed and re-permissioned but not deleted.
+// People get them per project (ProjectMember.roles holds these keys).
+model OrgRole {
+  id          String   @id @default(cuid())
+  companyId   String
+  key         String // stable id used in ProjectMember.roles; the name can change, the key doesn't
+  name        String
+  description String   @default("")
+  permissions String[]
+  builtIn     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, key])
 }
 
 enum ProjectStatus {
@@ -32,14 +43,15 @@ enum ProjectStatus {
 }
 
 model User {
-  id         String      @id @default(cuid())
-  email      String      @unique
-  name       String
-  photo      String?
-  provider   String      @default("email")
-  createdAt  DateTime    @default(now())
-  membership Membership?
-  sessions   Session[]
+  id           String          @id @default(cuid())
+  email        String          @unique
+  name         String
+  photo        String?
+  provider     String          @default("email")
+  createdAt    DateTime        @default(now())
+  membership   Membership?
+  sessions     Session[]
+  projectRoles ProjectMember[]
 }
 
 // One row per signed-in device. The phone keeps a long-lived refresh token (only its hash is
@@ -61,14 +73,11 @@ model Session {
 }
 
 model Company {
-  id          String   @id @default(cuid())
-  name        String
+  id        String   @id @default(cuid())
+  name      String
   // Quotation letterhead: address, phone, email, gstin, termsAndConditions.
-  profile     Json     @default("{}")
-  // Retired (Phase 1): stock is no longer checked at estimate time. Column dropped once the
-  // data migration has run; left unused here only until that migration lands.
-  estimateSeq Int      @default(0)
-  createdAt   DateTime @default(now())
+  profile   Json     @default("{}")
+  createdAt DateTime @default(now())
 
   members        Membership[]
   invites        Invite[]
@@ -77,6 +86,7 @@ model Company {
   rates          RateOverride[]
   catalogs       CatalogVersion[]
   projects       Project[]
+  orgRoles       OrgRole[]
   stockMovements StockMovement[]
 }
 
@@ -84,7 +94,9 @@ model Membership {
   id        String   @id @default(cuid())
   companyId String
   userId    String   @unique
-  roles     Role[]   @default([site_supervisor])
+  // Organisation-level roles only: owner / admin (or none). Every other role is held per
+  // project — see ProjectMember.
+  roles     Role[]   @default([])
   createdAt DateTime @default(now())
   company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -98,7 +110,9 @@ model Invite {
   companyId   String
   email       String
   name        String   @default("")
-  roles       Role[]   @default([site_supervisor])
+  roles       Role[]   @default([]) // organisation-level only (admin)
+  // Project assignments applied when they first sign in: [{ projectId, roles: [...] }]
+  projects    Json     @default("[]")
   invitedById String
   createdAt   DateTime @default(now())
   company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
@@ -110,22 +124,44 @@ model Invite {
 // A site or job the company is running. MTOs belong to one project each. Closing a project
 // (once installation is done) returns any leftover site material to stock.
 model Project {
-  id          String        @id @default(cuid())
-  companyId   String
-  name        String
-  siteName    String?
-  status      ProjectStatus @default(open)
-  createdById String
-  closedById  String?
-  closedAt    DateTime?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  estimates   Estimate[]
-  consumptions ConsumptionEntry[]
+  id                String             @id @default(cuid())
+  companyId         String
+  name              String
+  // Short text typed once per project; every MTO in it is numbered <code>-MTO-0001, 0002, …
+  code              String
+  mtoSeq            Int                @default(0)
+  siteName          String?
+  notificationEmail String?
+  status            ProjectStatus      @default(open)
+  createdById       String
+  closedById        String?
+  closedAt          DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  company           Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  estimates         Estimate[]
+  consumptions      ConsumptionEntry[]
+  members           ProjectMember[]
 
   @@unique([companyId, name])
+  @@unique([companyId, code])
   @@index([companyId, status])
+}
+
+// A person's roles on one project (site supervisor, project manager, finance, procurement,
+// logistics, viewer — any mix). Owner and admin stay organisation-wide on Membership.
+model ProjectMember {
+  id        String   @id @default(cuid())
+  companyId String
+  projectId String
+  userId    String
+  roles     String[] // OrgRole.key values
+  createdAt DateTime @default(now())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([companyId, userId])
 }
 
 model OtpCode {
@@ -192,17 +228,20 @@ model EstimateLine {
   estimateId   String
   lineId       String
   stockKey     String
-  qty          Decimal @db.Decimal(14, 2)
-  issuedQty    Decimal @default(0) @db.Decimal(14, 2) // issued from store for this line (Phase 3)
-  purchasedQty Decimal @default(0) @db.Decimal(14, 2) // bought for this line (received into stock first)
+  qty          Decimal  @db.Decimal(14, 2)
+  issuedQty    Decimal  @default(0) @db.Decimal(14, 2) // issued from store for this line (Phase 3)
+  purchasedQty Decimal  @default(0) @db.Decimal(14, 2) // bought for this line (received into stock first)
   estimate     Estimate @relation(fields: [companyId, estimateId], references: [companyId, id], onDelete: Cascade)
 
   @@id([companyId, estimateId, lineId])
   @@index([companyId, stockKey])
 }
 
+// Stock is kept per project: each project has its own store, prices and ledger. projectId ""
+// is the company's central stock — where a closed project's leftover material is returned.
 model StockLine {
   companyId     String
+  projectId     String   @default("") // "" only for legacy rows from before stock was project-scoped
   key           String // stockKey(): trade|item|material|size|secondarySize|core
   trade         String
   family        String   @default("")
@@ -218,31 +257,34 @@ model StockLine {
   updatedAt     DateTime @updatedAt
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  @@id([companyId, key])
+  @@id([companyId, projectId, key])
 }
 
 enum MovementType {
   RECEIPT // bought items received into store
-  ISSUE   // items issued from store for an MTO
-  RETURN  // leftover material returned to store (project close or cancel)
-  ADJUST  // manual correction by Procurement/Admin (reason required)
+  ISSUE // items issued from store for an MTO
+  RETURN // leftover material returned to store (project close or cancel)
+  ADJUST // manual correction by Procurement/Admin (reason required)
 }
 
 // Every stock in/out movement — the ledger that makes StockLine.onHand auditable.
 model StockMovement {
-  id          String       @id @default(cuid())
-  companyId   String
-  stockLineId String       // StockLine.key (compound PK: companyId + key)
-  type        MovementType
-  qty         Decimal      @db.Decimal(14, 2) // always positive; ISSUE/RETURN direction implied by type; ADJUST signed
-  estimateId  String?      // which MTO this movement is for
-  projectId   String?
-  reason      String?      // required for ADJUST
-  createdById String
-  createdAt   DateTime     @default(now())
-  company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  id              String       @id @default(cuid())
+  companyId       String
+  stockLineId     String // StockLine.key (compound PK: companyId + key)
+  type            MovementType
+  qty             Decimal      @db.Decimal(14, 2) // always positive; ISSUE/RETURN direction implied by type; ADJUST signed
+  estimateId      String? // which MTO this movement is for
+  projectId       String? // the store this movement is in ("" = central stock)
+  sourceProjectId String? // for a project-close RETURN into central stock: the project it came back from
+  reason          String? // required for ADJUST
+  createdById     String
+  createdAt       DateTime     @default(now())
+  company         Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId, stockLineId, createdAt])
+  @@index([companyId, projectId, stockLineId, createdAt])
+  @@index([companyId, sourceProjectId])
   @@index([companyId, estimateId])
 }
 
@@ -266,7 +308,7 @@ model Dispatch {
 }
 
 enum ConsumptionKind {
-  USED   // material installed or consumed in work
+  USED // material installed or consumed in work
   WASTED // material scrapped or broken — not returned to stock on close
 }
 
@@ -277,10 +319,10 @@ model ConsumptionEntry {
   id          String          @id @default(cuid())
   companyId   String
   projectId   String
-  stockKey    String          // matches StockLine.key
+  stockKey    String // matches StockLine.key
   qty         Decimal         @db.Decimal(14, 2)
   kind        ConsumptionKind
-  entryDate   DateTime        // the calendar date (midnight UTC)
+  entryDate   DateTime // the calendar date (midnight UTC)
   note        String?
   createdById String
   createdAt   DateTime        @default(now())
@@ -290,16 +332,17 @@ model ConsumptionEntry {
   @@index([companyId, projectId, stockKey])
 }
 
-// Company-specific rates. Anything not here falls back to the default rates in packages/shared.
+// Project-specific rates. Anything not here falls back to the default rates in packages/shared.
 model RateOverride {
   companyId    String
+  projectId    String   @default("") // rates are per project; "" only for legacy rows
   key          String // rateKey(): trade::family::item::material
   materialRate Decimal  @db.Decimal(14, 2)
   labourRate   Decimal  @db.Decimal(14, 2)
   updatedAt    DateTime @updatedAt
   company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  @@id([companyId, key])
+  @@id([companyId, projectId, key])
 }
 
 // Published versions of the item catalog (families, items, materials, sizes, cores).

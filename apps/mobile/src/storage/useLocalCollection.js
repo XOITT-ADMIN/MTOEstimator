@@ -8,8 +8,9 @@ import { api, events } from "../api/client";
 //
 // Local mode (no `remote`): the list lives on this device only — how the app always worked.
 //
-// Remote mode (`remote: { resource, companyId }`): the list is the company's shared copy on the
-// API (GET/POST /sync/:resource). This hook is the only place that knows about it:
+// Remote mode (`remote: { resource, companyId, scoped, projectId }`): the list is the company's
+// shared copy on the API (GET/POST /sync/:resource). A `scoped` collection (stock, rates) lives
+// inside one project — it's fetched with ?projectId= and stays empty and idle until one is picked. This hook is the only place that knows about it:
 //   · offline-first — the cache (per company) opens instantly; changes are queued in AsyncStorage
 //     and pushed when the server is reachable, so field work never waits on the network;
 //   · every apply() is diffed by id against the previous list → upserts/deletes in the queue;
@@ -20,8 +21,12 @@ import { api, events } from "../api/client";
 export function useLocalCollection({ localKey, seed, remote }) {
   const resource = remote?.resource || null;
   const companyId = remote?.companyId || null;
-  const isRemote = !!(resource && companyId);
-  const cacheKey = isRemote ? `${localKey}@${companyId}` : localKey;
+  const projectId = remote?.scoped ? remote.projectId || null : null;
+  const hasRemote = !!(resource && companyId);
+  // A project-scoped collection with no project picked is neither local nor remote: just empty.
+  const isRemote = hasRemote && (!remote.scoped || !!projectId);
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+  const cacheKey = isRemote ? `${localKey}@${companyId}${projectId ? `@${projectId}` : ""}` : hasRemote ? `${localKey}@${companyId}@none` : localKey;
   const queueKey = `${cacheKey}:queue`;
 
   const [items, setItems] = useState([]);
@@ -66,14 +71,14 @@ export function useLocalCollection({ localKey, seed, remote }) {
   const pull = useCallback(async () => {
     if (!isRemote) return;
     try {
-      const r = await api("GET", `/sync/${resource}`);
+      const r = await api("GET", `/sync/${resource}${query}`);
       if (!alive.current) return;
       setOnline(true);
       commit(mergeServer(r.items || []));
     } catch (e) {
       if (e?.offline) setOnline(false);
     }
-  }, [isRemote, resource, commit, mergeServer]);
+  }, [isRemote, resource, query, commit, mergeServer]);
 
   const flush = useCallback(async () => {
     if (!isRemote || !queue.current.size) return;
@@ -88,7 +93,7 @@ export function useLocalCollection({ localKey, seed, remote }) {
     const deletes = batch.filter(([, e]) => e.op === "delete").map(([id]) => id);
     let refused = null;
     try {
-      const r = await api("POST", `/sync/${resource}`, { upserts, deletes });
+      const r = await api("POST", `/sync/${resource}${query}`, { upserts, deletes });
       setOnline(true);
       const sent = new Map(batch);
       let list = itemsRef.current;
@@ -133,7 +138,7 @@ export function useLocalCollection({ localKey, seed, remote }) {
         flush();
       }
     }
-  }, [isRemote, resource, commit, saveQueue, pull]);
+  }, [isRemote, resource, query, commit, saveQueue, pull]);
 
   // ── Load cache (+ queue), then catch up with the server ───────────────────
   useEffect(() => {
@@ -153,9 +158,9 @@ export function useLocalCollection({ localKey, seed, remote }) {
         if (rawQueue) queue.current = new Map(JSON.parse(rawQueue));
         setPending(queue.current.size);
         // The shared workspace starts from the server's data, never from demo seed data.
-        commit(raw ? JSON.parse(raw) : !isRemote && seed ? seed() : []);
+        commit(raw ? JSON.parse(raw) : !hasRemote && seed ? seed() : []);
       } catch (e) {
-        if (!cancelled) commit(!isRemote && seed ? seed() : []);
+        if (!cancelled) commit(!hasRemote && seed ? seed() : []);
       } finally {
         if (!cancelled) setLoaded(true);
       }
@@ -195,6 +200,7 @@ export function useLocalCollection({ localKey, seed, remote }) {
 
   const apply = useCallback(
     (fn) => {
+      if (hasRemote && !isRemote) return; // no project picked yet — nothing to change
       const prev = itemsRef.current;
       const next = fn(prev);
       if (next === prev) return;
@@ -215,7 +221,7 @@ export function useLocalCollection({ localKey, seed, remote }) {
       clearTimeout(pushTimer.current);
       pushTimer.current = setTimeout(() => flush(), 500);
     },
-    [commit, isRemote, saveQueue, flush]
+    [commit, hasRemote, isRemote, saveQueue, flush]
   );
 
   // Stable identity: the contexts wrap apply in useCallback(..., []) and must always reach the

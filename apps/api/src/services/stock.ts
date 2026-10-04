@@ -4,13 +4,13 @@ import type { Db } from "../db.js";
 import { toNum } from "../lib/num.js";
 import { stockSchema } from "./schemas.js";
 
-// Stock lines as the app sees them: on hand, used (summed from every estimate line in the company
-// that draws on stock) and where it's used. "available" = stock − used.
-export async function listStock(db: Db, companyId: string) {
+// Stock lines of one project as the app sees them: on hand, used (summed from every estimate line
+// in that project that draws on stock) and where it's used. "available" = stock − used.
+export async function listStock(db: Db, companyId: string, projectId: string) {
   const [lines, used] = await Promise.all([
-    db.stockLine.findMany({ where: { companyId }, orderBy: [{ trade: "asc" }, { item: "asc" }, { key: "asc" }] }),
+    db.stockLine.findMany({ where: { companyId, projectId }, orderBy: [{ trade: "asc" }, { item: "asc" }, { key: "asc" }] }),
     db.estimateLine.findMany({
-      where: { companyId },
+      where: { companyId, estimate: { projectId } },
       select: { stockKey: true, qty: true, estimateId: true, estimate: { select: { name: true, estimateNumber: true } } },
     }),
   ]);
@@ -49,7 +49,7 @@ export async function listStock(db: Db, companyId: string) {
   });
 }
 
-export async function upsertStock(db: Db, companyId: string, raw: unknown) {
+export async function upsertStock(db: Db, companyId: string, projectId: string, raw: unknown) {
   const e = stockSchema.parse(raw);
   const key = stockKey({ ...e, material: e.material ?? "", size: e.size ?? "" });
   const data = {
@@ -66,8 +66,8 @@ export async function upsertStock(db: Db, companyId: string, raw: unknown) {
   // A doc without a price (older app build) leaves the stored price as it is.
   const price = e.price == null ? undefined : Math.max(0, Math.round(e.price * 100) / 100);
   await db.stockLine.upsert({
-    where: { companyId_key: { companyId, key } },
-    create: { companyId, key, ...data, price: price ?? 0 },
+    where: { companyId_projectId_key: { companyId, projectId, key } },
+    create: { companyId, projectId, key, ...data, price: price ?? 0 },
     update: price == null ? data : { ...data, price },
   });
   return key;

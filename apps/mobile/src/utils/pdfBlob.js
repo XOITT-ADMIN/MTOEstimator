@@ -7,6 +7,6 @@ import { buildQuotationHtml } from "./quotationHtml";
 
 export async function estimatePdfBase64(estimate, company) {
   const html = buildQuotationHtml(estimate, company);
-  const { base64 } = await Print.printToFileAsync({ html, base64: true });
+  const { base64 } = await Print.printToFileAsync({ html, base64: true, width: 595, height: 842 });
   return base64;
 }

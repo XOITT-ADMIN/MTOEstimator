@@ -160,7 +160,37 @@ export function refreshTokens() {
   return refreshing;
 }
 
+// ── Central "busy" state ─────────────────────────────────────────────────────
+// Every action the user starts (a request that changes something) bumps a counter while it is in
+// flight; <BusyOverlay /> shows one loader for the whole app from that. Reads (screens refetching,
+// live updates from teammates) and background traffic — autosave sync, token refresh — are left
+// out, so the loader only appears when you did something.
+let busyCount = 0;
+const busyListeners = new Set();
+export const busy = {
+  isBusy: () => busyCount > 0,
+  subscribe(fn) {
+    busyListeners.add(fn);
+    return () => busyListeners.delete(fn);
+  },
+};
+function setBusy(delta) {
+  busyCount = Math.max(0, busyCount + delta);
+  busyListeners.forEach((fn) => fn(busyCount > 0));
+}
+const isTracked = (method, path) => method !== "GET" && !path.startsWith("/sync/") && path !== "/auth/refresh";
+
 export async function api(method, path, body) {
+  if (!isTracked(method, path)) return request(method, path, body);
+  setBusy(1);
+  try {
+    return await request(method, path, body);
+  } finally {
+    setBusy(-1);
+  }
+}
+
+async function request(method, path, body) {
   if (!apiEnabled) throw new ApiError(0, "No server is configured.", "no_server");
   const isAuthCall = path.startsWith("/auth/otp") || path === "/auth/refresh";
   if (!isAuthCall && refresh && accessNeedsRefresh()) await refreshTokens();

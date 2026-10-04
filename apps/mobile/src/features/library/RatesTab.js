@@ -34,7 +34,7 @@ export function RatesTab({ query = "" }) {
       ) : null}
 
       {rows.length === 0 ? (
-        <EmptyState icon="tag" title="No rates match" body="Try another word or family." />
+        <EmptyState icon="tag" title="No budget rates match" body="Try another word or family." />
       ) : (
         <Group style={{ borderRadius: 14 }}>
           {rows.map((r) => (
@@ -57,7 +57,7 @@ export function RatesTab({ query = "" }) {
                   {[r.trade, r.family, r.material].filter(Boolean).join(" · ")}
                 </T>
                 <T variant="label" weight={400} color="text" num>
-                  Material {money(r.materialRate)} · Labour {money(r.labourRate)}
+                  Budget {money(r.materialRate)} · Labour (indicative) {money(r.labourRate)}
                 </T>
               </View>
               {canEdit ? <Icon name="chevronRight" size={20} color="chevron" /> : null}
@@ -95,14 +95,14 @@ function RateEditorSheet({ rate, onClose, onSave, onReset }) {
   const [labourRate, setLabourRate] = useState(String(rate.labourRate));
   const clean = (set) => (v) => set(v.replace(/[^0-9.]/g, ""));
   return (
-    <Sheet title={rate.item} subtitle={[rate.trade, rate.family, rate.material].filter(Boolean).join(" · ")} onClose={onClose} footer={<Button title="Save rate" icon="check" onPress={() => onSave({ materialRate: Number(materialRate) || 0, labourRate: Number(labourRate) || 0 })} />}>
+    <Sheet title={rate.item} subtitle={[rate.trade, rate.family, rate.material].filter(Boolean).join(" · ")} onClose={onClose} footer={<Button title="Save budget rates" icon="check" onPress={() => onSave({ materialRate: Number(materialRate) || 0, labourRate: Number(labourRate) || 0 })} />}>
       <View style={{ padding: 20, gap: 14 }}>
         <View style={{ flexDirection: "row", gap: 10 }}>
-          <MoneyField label="Material" value={materialRate} onChangeText={clean(setMaterialRate)} unit={rate.unit} />
-          <MoneyField label="Labour" value={labourRate} onChangeText={clean(setLabourRate)} unit={rate.unit} />
+          <MoneyField label="Material (budget)" value={materialRate} onChangeText={clean(setMaterialRate)} unit={rate.unit} />
+          <MoneyField label="Labour (indicative)" value={labourRate} onChangeText={clean(setLabourRate)} unit={rate.unit} />
         </View>
         <T variant="caption" weight={400}>
-          New lines use this rate. Lines already in estimates keep their price.
+          These are budgetary and indicative figures. New lines use them; lines already in MTOs keep theirs.
         </T>
         {onReset ? <TextButton title="Reset to catalog default" icon="refresh" onPress={onReset} style={{ alignSelf: "flex-start", height: 44 }} /> : null}
       </View>

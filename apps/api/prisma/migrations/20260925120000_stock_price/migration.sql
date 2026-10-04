@@ -1,2 +1,0 @@
--- AlterTable
-ALTER TABLE "StockLine" ADD COLUMN "price" DECIMAL(14,2) NOT NULL DEFAULT 0;

@@ -16,7 +16,7 @@ const APP_VERSION = "2.0";
 export default function SettingsScreen({ navigation }) {
   const { user, signOut } = useAuth();
   const { profile, updateProfile, status, company, members, canManageTeam, roles, serverMode } = useCompany();
-  const { estimates, pending, online } = useEstimates();
+  const { estimates, loaded, pending, online } = useEstimates();
   const connected = status === "member";
   const canEditCompany = !connected || canManageTeam;
 
@@ -47,7 +47,7 @@ export default function SettingsScreen({ navigation }) {
   const f = (key, label, placeholder, props) => <ProfileField key={key} label={label} value={profile[key]} placeholder={placeholder} onSave={save(key)} editable={canEditCompany} {...props} />;
 
   return (
-    <Screen tabBar title="Settings">
+    <Screen tabBar title="Settings" loading={status === "loading" && !loaded}>
       <Section title="Account" style={{ marginTop: 4 }}>
         <Card style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
           <Avatar name={user?.name || user?.email} size={52} />
@@ -66,6 +66,7 @@ export default function SettingsScreen({ navigation }) {
       <Section title="Team">
         <Group>
           {connected ? (
+            <>
             <Row left={<InitialsTile name={company?.name} size={48} />} onPress={() => navigation.navigate("Team")} accessibilityLabel="Open team">
               <T variant="rowTitle" numberOfLines={1}>
                 {company?.name || "Your company"}
@@ -75,6 +76,15 @@ export default function SettingsScreen({ navigation }) {
                 {canManageTeam ? " · add or manage people" : ""}
               </T>
             </Row>
+            {canManageTeam ? (
+              <Row left={<IconTile icon="lock" />} onPress={() => navigation.navigate("Roles")} accessibilityLabel="Open roles and permissions" right={<Icon name="chevronRight" size={16} color="muted" />}>
+                <T variant="rowTitle">Roles & permissions</T>
+                <T variant="label" weight={400}>
+                  Add or rename roles and choose what each can do
+                </T>
+              </Row>
+            ) : null}
+            </>
           ) : (
             <Row left={<IconTile icon="building" />}>
               <T variant="rowTitle">This device only</T>
@@ -104,15 +114,6 @@ export default function SettingsScreen({ navigation }) {
         </Group>
         <T variant="caption" weight={400} style={{ paddingHorizontal: 4 }}>
           {canEditCompany ? "Printed on every PDF. Changes save as you type." : "Only an owner or admin can change these details."}
-        </T>
-      </Section>
-
-      <Section title="Notifications">
-        <Group>
-          {f("notificationEmail", "Notify by email when Ready", "Add an email address", { keyboardType: "email-address", autoCapitalize: "none" })}
-        </Group>
-        <T variant="caption" weight={400} style={{ paddingHorizontal: 4 }}>
-          {canEditCompany ? "We'll email this address whenever a field engineer marks an estimate Ready. The engineer still shares the quotation itself, by email or WhatsApp." : "Only an owner or admin can change this."}
         </T>
       </Section>
 

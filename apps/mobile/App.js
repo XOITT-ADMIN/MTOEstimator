@@ -20,6 +20,8 @@ import { InventoryProvider } from "./src/inventory/InventoryContext";
 import RootNavigator from "./src/navigation/RootNavigator";
 import SyncBanner from "./src/components/SyncBanner";
 import LockScreen from "./src/components/LockScreen";
+import { ConfirmDialog } from "./src/ui/components/ConfirmDialog";
+import { BusyOverlay } from "./src/ui/components/BusyOverlay";
 import { AppLockProvider } from "./src/context/AppLockContext";
 
 enableScreens();
@@ -43,6 +45,8 @@ export default function App() {
                       <StatusBar style="dark" />
                       <RootNavigator />
                       <SyncBanner />
+                      <ConfirmDialog />
+                      <BusyOverlay />
                       <LockScreen />
                     </InventoryProvider>
                   </EstimatesProvider>

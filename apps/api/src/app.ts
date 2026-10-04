@@ -44,7 +44,7 @@ export async function buildApp({ db, env, mailer, logger = true }: { db: Db; env
   const app = Fastify({
     logger: logger ? { level: env.NODE_ENV === "production" ? "info" : "debug" } : false,
     trustProxy: true,
-    bodyLimit: 12 * 1024 * 1024, // an estimate's quotation PDF, base64-encoded, rides in the notify-ready request
+    bodyLimit: 12 * 1024 * 1024,
   });
   const deps: Deps = { db, env, hub: new RealtimeHub(), mailer: mailer ?? createMailer(env.SMTP_URL, env.MAIL_FROM) };
 

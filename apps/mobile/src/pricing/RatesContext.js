@@ -3,6 +3,7 @@ import React, { createContext, useContext, useMemo, useCallback, useState } from
 import { rateKey, getDefaultRate, listAllRates } from "./ratesCatalog";
 import { useLocalCollection } from "../storage/useLocalCollection";
 import { useCompany, useCompanyRemote } from "../context/CompanyContext";
+import { useProjects } from "../context/ProjectsContext";
 
 const STORAGE_KEY = "mto-estimator/rate-overrides.v1";
 
@@ -10,7 +11,9 @@ const RatesContext = createContext(null);
 
 export function RatesProvider({ children }) {
   // Stored as rows { id: rateKey, materialRate, labourRate }.
-  const remote = useCompanyRemote("rates");
+  // Rates are kept per project: these are the rates of whichever project is in scope right now.
+  const { scopeProjectId } = useProjects();
+  const remote = useCompanyRemote("rates", { projectId: scopeProjectId });
   const { canManageLibrary } = useCompany();
   const { items: rows, loaded, apply: applyRows, syncError: collectionError, clearSyncError: clearCollectionError } = useLocalCollection({
     localKey: STORAGE_KEY + ".rows",

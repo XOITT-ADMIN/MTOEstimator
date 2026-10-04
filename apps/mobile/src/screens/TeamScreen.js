@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { View, ScrollView, Pressable } from "react-native";
+import { View, ScrollView, Pressable, ActivityIndicator } from "react-native";
 
 import { TopBar, Blueprint, InitialsTile, Section, Group, Card, Avatar, RolePill, OptionCard, Field, Button, TextButton, EmptyState, T, Icon, colors, radius } from "../ui";
 import { plural, shortDate } from "../features/estimates";
@@ -18,7 +18,7 @@ export default function TeamScreen({ navigation }) {
   const { company, members, invites, isOwner, canManageTeam, roles: myRoles, invite, revokeInvite, setMemberRoles, removeMember, status } = useCompany();
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [inviteRoles, setInviteRoles] = useState(["site_supervisor"]);
+  const [inviteRoles, setInviteRoles] = useState([]);
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState(null); // member expanded to change roles / remove
 
@@ -48,7 +48,6 @@ export default function TeamScreen({ navigation }) {
 
   async function toggleRole(m, key) {
     const next = toggled(m.roles || [], key);
-    if (!next.length) return; // must keep at least one role
     try {
       await setMemberRoles(m.id, next);
     } catch (e) {
@@ -57,6 +56,17 @@ export default function TeamScreen({ navigation }) {
   }
 
   const back = <TopBar plain title="Team" onBack={() => navigation.goBack()} />;
+
+  if (status === "loading") {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+        {back}
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+          <ActivityIndicator size="large" color={colors.action} />
+        </View>
+      </View>
+    );
+  }
 
   if (status !== "member") {
     return (
@@ -105,12 +115,12 @@ export default function TeamScreen({ navigation }) {
                         {m.email || "—"}
                       </T>
                     </View>
-                    <RolePill roles={mRoles} label={rolesLabel(mRoles)} />
+                    {mRoles.length ? <RolePill roles={mRoles} label={rolesLabel(mRoles)} /> : <T variant="caption" weight={400} color="muted">{m.projects?.length ? `${m.projects.length} project${m.projects.length === 1 ? "" : "s"}` : "No projects"}</T>}
                   </Pressable>
                   {open ? (
                     <View style={{ paddingHorizontal: 16, paddingBottom: 12, gap: 8, backgroundColor: colors.tintBlueSoft }}>
                       <T variant="caption" weight={400}>
-                        Tap to give or remove a role. They can hold more than one.
+                        Admins can manage the team, library and every project. Site Supervisor, Project Manager, Finance, Procurement and Logistics are given per project, on the project's Team section.
                       </T>
                       {ASSIGNABLE_ROLES.map((key) => (
                         <OptionCard key={key} compact title={roleLabel(key)} selected={mRoles.includes(key)} onPress={() => toggleRole(m, key)} />
@@ -124,7 +134,7 @@ export default function TeamScreen({ navigation }) {
           </Group>
           {canManageTeam && members.length > 1 ? (
             <T variant="caption" weight={400} style={{ paddingHorizontal: 4 }}>
-              Tap a person to change their role.
+              Tap a person to make them an Admin or remove them.
             </T>
           ) : null}
         </Section>
@@ -135,7 +145,7 @@ export default function TeamScreen({ navigation }) {
               <Field label="Name" value={name} onChangeText={setName} placeholder="e.g. Meera" autoCapitalize="words" />
               <Field label="Email they sign in with" value={email} onChangeText={(v) => setEmail(normaliseEmail(v))} placeholder="name@company.in" keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
               <View style={{ gap: 6 }}>
-                <T variant="label">Roles</T>
+                <T variant="label">Organisation role (optional)</T>
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                   {ASSIGNABLE_ROLES.map((key) => (
                     <RoleChoice key={key} label={roleLabel(key)} active={inviteRoles.includes(key)} onPress={() => setInviteRoles((prev) => toggled(prev, key))} />
@@ -145,11 +155,11 @@ export default function TeamScreen({ navigation }) {
               <View style={{ flexDirection: "row", gap: 8 }}>
                 <Icon name="info" size={16} color="muted" />
                 <T variant="caption" weight={400} style={{ flex: 1 }}>
-                  They sign in with this email and join {company?.name} automatically. No link to send.
+                  They sign in with this email and join {company?.name} automatically. Then add them to a project (open the project › Team) and pick their role there.
                 </T>
               </View>
             </Card>
-            <Button title="Add to team" icon="userPlus" onPress={add} loading={busy} disabled={busy || !isValidEmail(email) || !inviteRoles.length} />
+            <Button title="Add to team" icon="userPlus" onPress={add} loading={busy} disabled={busy || !isValidEmail(email)} />
           </Section>
         ) : null}
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { View, Pressable } from "react-native";
 
-import { Screen, Section, Blueprint, Card, Group, Row, IconTile, T, Icon, StatusBadge, TradePill, CountPill, SyncChip, EmptyState, HStack, XMark, Avatar, colors, STATUS_LABELS } from "../ui";
+import { Screen, Section, Blueprint, Card, Group, Row, IconTile, T, Icon, StatusBadge, TradePill, SyncChip, EmptyState, HStack, XMark, Avatar, colors, STATUS_LABELS } from "../ui";
 import AccountMenu from "../components/AccountMenu";
 import { EstimateRow } from "../features/EstimateRow";
 import { summarize, greetingFor, money, moneyParts, plural, timeAgo } from "../features/estimates";
@@ -16,10 +16,10 @@ import { confirmAction } from "../utils/confirm";
 // Home is now the Inbox: what's waiting on you, then your own MTOs, then the value card and
 // anything else that needs attention. See XMTO_BUILD_BRIEF.md section 9.
 export default function HomeScreen({ navigation }) {
-  const { estimates, fetchInbox } = useEstimates();
+  const { estimates, loaded, fetchInbox } = useEstimates();
   const { user, signOut } = useAuth();
   const { profile, company, canManageTeam } = useCompany();
-  const { lines: stockLines, getAvailability } = useInventory();
+  const { getAvailability } = useInventory();
   const { getProject } = useProjects();
   const sync = useSyncState();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -58,7 +58,6 @@ export default function HomeScreen({ navigation }) {
   const pickUp = rows.find((r) => r.estimate.status === "DRAFT" && r.items > 0) || rows[0];
   const unpriced = rows.filter((r) => r.unpriced > 0);
   const unpricedCount = unpriced.reduce((a, r) => a + r.unpriced, 0);
-  const out = stockLines.filter((l) => l.stock <= 0).length;
   const recent = rows.filter((r) => r !== pickUp).slice(0, 3);
   const [whole, paise] = moneyParts(stats.value);
   const first = (user?.name || "").trim().split(/\s+/)[0] || "there";
@@ -71,7 +70,7 @@ export default function HomeScreen({ navigation }) {
   }
 
   return (
-    <Screen tabBar>
+    <Screen tabBar loading={!loaded}>
       {/* Header */}
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
         <View style={{ paddingTop: 4 }}>
@@ -198,28 +197,14 @@ export default function HomeScreen({ navigation }) {
       ) : null}
 
       {/* Needs attention */}
-      {unpricedCount || out ? (
+      {unpricedCount ? (
         <Section title="Needs attention">
           <Group>
             {unpricedCount ? (
               <Row key="rate" left={<IconTile icon="tag" bg={colors.warningTint} color="warningInk" />} onPress={() => open(unpriced[0].estimate.id)} minHeight={68}>
-                <T variant="bodyStrong">{plural(unpricedCount, "line")} {unpricedCount === 1 ? "has" : "have"} no rate</T>
+                <T variant="bodyStrong">{plural(unpricedCount, "line")} {unpricedCount === 1 ? "has" : "have"} no budget rate</T>
                 <T variant="label" weight={400} numberOfLines={1}>
                   {unpriced[0].estimate.name} · price them before sending
-                </T>
-              </Row>
-            ) : null}
-            {out ? (
-              <Row
-                key="stock"
-                left={<IconTile icon="box" />}
-                onPress={() => navigation.navigate("Library", { section: "Stock" })}
-                minHeight={68}
-                right={<CountPill tone="danger">{out} out</CountPill>}
-              >
-                <T variant="bodyStrong">Stock alerts</T>
-                <T variant="label" weight={400} numberOfLines={1}>
-                  {canManageTeam ? "Nothing on hand for these items" : "Some items are out of stock"}
                 </T>
               </Row>
             ) : null}

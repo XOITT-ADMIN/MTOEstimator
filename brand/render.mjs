@@ -34,7 +34,7 @@ const jobs = {
   "feature-graphic.png": [1024,500, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 500"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${NAVY}"/><stop offset="1" stop-color="${B7}"/></linearGradient></defs>
     <rect width="1024" height="500" fill="url(#g)"/>
     <g transform="translate(56,70) scale(0.5)">${logo("#FFFFFF","#FFFFFF","#DCE8F5",B5,"#9EC3E8").replace(/^<svg[^>]*>|<\/svg>$/g,"")}</g>
-    <text x="88" y="360" font-family="P" font-weight="500" font-size="30" fill="#DCE8F5">Plumbing &amp; electrical take-offs, priced on site.</text>
+    <text x="88" y="360" font-family="P" font-weight="500" font-size="30" fill="#DCE8F5">Plumbing &amp; electrical take-offs, shared with your team.</text>
     <text x="940" y="470" text-anchor="end" font-family="P" font-weight="500" font-size="20" fill="#9EC3E8">A XOITT Transformation product</text></svg>`],
   "mark.png": [512,512, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${X(NAVY, B5)}</svg>`],
   "mark-white.png": [512,512, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${X("#FFFFFF", B5)}</svg>`],

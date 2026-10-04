@@ -5,6 +5,7 @@ import { Card, Group, Chip, ChipRow, StockLine, stockLevel, EmptyState, Button, 
 import { specLabel } from "../estimates";
 import { useInventory } from "../../inventory/InventoryContext";
 import { useCompany } from "../../context/CompanyContext";
+import { useProjectScope } from "../../context/ProjectsContext";
 import { parseStockCsv, StockCsvError } from "../../inventory/stockCsv";
 import { saveTextFile, pickTextFile } from "../../utils/files";
 import { confirmAction, notify } from "../../utils/confirm";
@@ -17,8 +18,9 @@ const UNIT_WORDS = { m: "Metres", Nos: "Nos", Set: "Sets", Kg: "Kg", L: "Litres"
 // Library › Stock: health summary, actions, filters, and one card per item with its lines.
 export function StockTab({ query = "" }) {
   const { lines, updateLine, removeLine, bulkUpdate, upsertLine, exportCsv, importCsv, canEdit = true } = useInventory();
-  const { roles } = useCompany();
-  const isProcurement = roles?.some((r) => ["procurement", "owner", "admin"].includes(r));
+  const { can } = useCompany();
+  const { projectId } = useProjectScope();
+  const isProcurement = can("stock.in", projectId);
   const [filter, setFilter] = useState("All");
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
@@ -190,7 +192,7 @@ export function StockTab({ query = "" }) {
       )}
 
       {editing ? <LineEditorSheet key={editing.key} line={lines.find((l) => l.key === editing.key) || editing} onClose={() => setEditing(null)} onSave={(patch) => { updateLine(editing.key, patch); setEditing(null); }} onRemove={() => remove(editing)} onMovements={() => { setMovementsLine({ key: editing.key, label: `${editing.item} · ${specLabel(editing)}` }); setEditing(null); }} /> : null}
-      {movementsLine ? <StockMovementsSheet stockLineId={movementsLine.key} lineLabel={movementsLine.label} onClose={() => setMovementsLine(null)} /> : null}
+      {movementsLine ? <StockMovementsSheet projectId={projectId} stockLineId={movementsLine.key} lineLabel={movementsLine.label} onClose={() => setMovementsLine(null)} /> : null}
       {bulkOpen ? <BulkSheet count={selected.size} onClose={() => setBulkOpen(false)} onApply={(patch) => { bulkUpdate(Array.from(selected), patch); setBulkOpen(false); exitSelect(); }} /> : null}
       {addOpen ? <AddLineSheet onClose={() => setAddOpen(false)} onSave={(entry) => { upsertLine(entry); setAddOpen(false); }} /> : null}
       {purchasesOpen ? <PendingPurchasesSheet onClose={() => setPurchasesOpen(false)} /> : null}

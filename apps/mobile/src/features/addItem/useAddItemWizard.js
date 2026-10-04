@@ -4,6 +4,7 @@ import { tradeCatalog, tradeItems, findItem, unitFor } from "../../data/catalog"
 import { useCatalog } from "../../library/CatalogContext";
 import { useEstimates } from "../../context/EstimatesContext";
 import { useRates } from "../../pricing/RatesContext";
+import { useProjectScope } from "../../context/ProjectsContext";
 import { calculateItemMaterialTotal, calculateItemLabourTotal, calculateItemTotal } from "../../pricing/calculations";
 
 // ── The Add item flow, lifted straight from the MTO sheets ───────────────────
@@ -54,6 +55,7 @@ export function useAddItemWizard({ estimateId, editItemId, onDone }) {
   const { estimates, getEstimate, addItem, updateItem } = useEstimates();
   const { getRate } = useRates();
   const estimate = getEstimate(estimateId);
+  useProjectScope(estimate?.projectId); // this MTO's project decides the rates (and stock) in play
   const editingItem = editItemId ? estimate?.items.find((it) => it.id === editItemId) : null;
   const isEditing = !!editingItem;
 

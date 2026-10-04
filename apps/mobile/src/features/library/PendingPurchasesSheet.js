@@ -10,10 +10,10 @@ const fmt = (n) => {
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
 };
 
-// One MTO's slice of a pending purchase: "Receive & issue" does both steps — records the
+// One MTO's slice of a pending purchase: "Stock in & allocate" does both steps — records the
 // receipt into stock, then issues that qty straight to the MTO that's waiting on it — so a
 // purchase earmarked for a specific line never sits in stock unissued and untracked.
-function WaitingRow({ stockKey, mto, onDone }) {
+function WaitingRow({ projectId, stockKey, mto, onDone }) {
   const [qty, setQty] = useState(String(mto.pending));
   const [busy, setBusy] = useState(false);
 
@@ -22,12 +22,12 @@ function WaitingRow({ stockKey, mto, onDone }) {
     if (!Number.isFinite(n) || n <= 0) return;
     setBusy(true);
     try {
-      await api("POST", "/stock/receipts", { lines: [{ stockLineId: stockKey, qty: n, estimateId: mto.estimateId }] });
+      await api("POST", "/stock/receipts", { projectId, lines: [{ stockLineId: stockKey, qty: n, estimateId: mto.estimateId }] });
       await api("POST", `/mtos/${mto.estimateId}/procurement`, { lines: [{ lineId: mto.lineId, issueQty: n, purchaseQty: 0 }] });
-      notify("Received & issued", `${fmt(n)} sent to ${mto.estimateNumber}.`);
+      notify("Stocked in & allocated", `${fmt(n)} sent to ${mto.estimateNumber}.`);
       onDone();
     } catch (e) {
-      notify("Couldn't finish this", e?.message || "Try again — if stock was received but not issued, finish it from the MTO's Procurement tab.");
+      notify("Couldn't finish this", e?.message || "Try again — if stock was added but not allocated, finish it from the MTO's Procurement tab.");
     } finally {
       setBusy(false);
     }
@@ -43,7 +43,7 @@ function WaitingRow({ stockKey, mto, onDone }) {
         <View style={{ flex: 1 }}>
           <Field value={qty} onChangeText={setQty} keyboardType="decimal-pad" placeholder="Qty" />
         </View>
-        <Button title="Receive & issue" compact loading={busy} disabled={busy} onPress={receiveAndIssue} />
+        <Button title="Stock in & allocate" compact loading={busy} disabled={busy} onPress={receiveAndIssue} />
       </HStack>
     </View>
   );
@@ -57,10 +57,10 @@ function PendingGroup({ row, onDone }) {
         <T variant="bodyStrong" numberOfLines={1} style={{ flex: 1 }}>{label || row.stockKey}</T>
         <T variant="caption" weight={600}>{fmt(row.pending)} {row.unit} to buy</T>
       </HStack>
-      <T variant="caption" weight={400} style={{ color: colors.faint }}>On hand: {fmt(row.onHand)} {row.unit}</T>
+      <T variant="caption" weight={400} style={{ color: colors.faint }}>{row.projectName ? `${row.projectName} · ` : ""}On hand: {fmt(row.onHand)} {row.unit}</T>
       <View style={{ marginTop: 4 }}>
         {row.mtos.map((mto) => (
-          <WaitingRow key={`${row.stockKey}-${mto.lineId}`} stockKey={row.stockKey} mto={mto} onDone={onDone} />
+          <WaitingRow key={`${row.stockKey}-${mto.lineId}`} projectId={row.projectId} stockKey={row.stockKey} mto={mto} onDone={onDone} />
         ))}
       </View>
     </View>
@@ -84,7 +84,7 @@ export function PendingPurchasesSheet({ onClose }) {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <Sheet visible title="Pending purchases" subtitle="Marked “to buy” during procurement, not yet received" onClose={onClose}>
+    <Sheet visible title="Pending purchases" subtitle="Across all projects — marked “to buy”, not yet stocked in" onClose={onClose}>
       {state.loading ? (
         <View style={{ padding: 40, alignItems: "center" }}>
           <ActivityIndicator color={colors.action} />
@@ -92,11 +92,11 @@ export function PendingPurchasesSheet({ onClose }) {
       ) : state.error ? (
         <EmptyState icon="alert" title="Couldn't load" body={state.error} style={{ paddingHorizontal: 20, paddingVertical: 24 }} />
       ) : !state.rows?.length ? (
-        <EmptyState icon="truck" title="Nothing pending" body="Every purchase marked in procurement has been received and issued." style={{ paddingHorizontal: 20, paddingVertical: 24 }} />
+        <EmptyState icon="truck" title="Nothing pending" body="Every purchase marked in procurement has been stocked in and allocated." style={{ paddingHorizontal: 20, paddingVertical: 24 }} />
       ) : (
         <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 32 }}>
           {state.rows.map((row) => (
-            <PendingGroup key={row.stockKey} row={row} onDone={load} />
+            <PendingGroup key={`${row.projectId}-${row.stockKey}`} row={row} onDone={load} />
           ))}
         </ScrollView>
       )}

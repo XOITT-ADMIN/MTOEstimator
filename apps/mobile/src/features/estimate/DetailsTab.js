@@ -15,6 +15,7 @@ export function DetailsTab({ estimate, update, canEdit }) {
   const { canManageProjects } = useCompany();
   const [addingProject, setAddingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectCode, setNewProjectCode] = useState("");
   const [busy, setBusy] = useState(false);
 
   const project = getProject(estimate.projectId);
@@ -23,13 +24,15 @@ export function DetailsTab({ estimate, update, canEdit }) {
 
   async function addProject() {
     const name = newProjectName.trim();
-    if (!name) return;
+    const code = newProjectCode.trim();
+    if (!name || !code) return;
     setBusy(true);
     try {
-      const p = await create({ name });
+      const p = await create({ name, code });
       update({ projectId: p.id });
       setAddingProject(false);
       setNewProjectName("");
+      setNewProjectCode("");
     } catch (e) {
       notify("Couldn't create project", e?.message || "Try again.");
     } finally {
@@ -57,6 +60,7 @@ export function DetailsTab({ estimate, update, canEdit }) {
             {addingProject ? (
               <HStack gap={8} align="flex-start" style={{ paddingTop: 4 }}>
                 <Field value={newProjectName} onChangeText={setNewProjectName} placeholder="Project name" autoFocus style={{ flex: 1 }} />
+                <Field value={newProjectCode} onChangeText={(v) => setNewProjectCode(v.toUpperCase().replace(/[^A-Z0-9]/g, ""))} placeholder="Code" autoCapitalize="characters" maxLength={12} style={{ width: 96 }} />
                 <Button title="Add" compact compactText loading={busy} disabled={busy || !newProjectName.trim()} onPress={addProject} style={{ marginTop: 2 }} />
               </HStack>
             ) : null}

@@ -8,7 +8,7 @@ import { useAuth, OTP_LENGTH, OTP_RESEND_SECONDS, isValidEmail } from "../contex
 // Sign in with email only: name + work email → 6-digit code → in.
 // Tall phones get the full navy hero; short phones (and the code step) get a compact one.
 
-const FEATURES = ["Log items by trade, size and quantity", "Rates and stock from your company library", "Send a GST-ready PDF quote in one tap"];
+const FEATURES = ["Log items by trade, size and quantity", "Budget rates and stock from your company library", "Send a GST-ready PDF quote in one tap"];
 
 function HeroFull() {
   return (
@@ -16,7 +16,7 @@ function HeroFull() {
       <EstimateGhost />
       <Logo size={40} onDark />
       <T size={26} weight={600} color="white" style={{ lineHeight: 34, maxWidth: 300 }}>
-        Material take-offs, priced on site.
+        Material take-offs, made simple.
       </T>
       <View style={{ gap: 10 }}>
         {FEATURES.map((f) => (
@@ -39,7 +39,7 @@ function HeroCompact({ top }) {
     <Blueprint style={{ paddingTop: top, paddingHorizontal: 24, paddingBottom: 36, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
       <Logo size={30} onDark />
       <T variant="label" weight={400} color="onNavyMuted" style={{ textAlign: "right" }}>
-        {"Material take-offs,\npriced on site."}
+        {"Material take-offs,\nmade simple."}
       </T>
     </Blueprint>
   );

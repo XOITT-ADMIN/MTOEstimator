@@ -15,7 +15,7 @@ const filterLabel = (f) => STATUS_LABELS[f] || f;
 
 // All estimates: search, filter chips with counts, swipe a row for Duplicate / Delete.
 export default function EstimatesScreen({ navigation, route }) {
-  const { estimates, deleteEstimate, duplicateEstimate } = useEstimates();
+  const { estimates, loaded, deleteEstimate, duplicateEstimate } = useEstimates();
   const { canManageTeam, canEditEstimates } = useCompany();
   const { getAvailability } = useInventory();
 
@@ -54,7 +54,7 @@ export default function EstimatesScreen({ navigation, route }) {
   const chips = FILTERS.filter((f) => f === "All" || counts[f] > 0 || f === filter);
 
   return (
-    <Screen tabBar title="MTOs" count={estimates.length}>
+    <Screen tabBar title="MTOs" count={estimates.length} loading={!loaded}>
       <View style={{ gap: 12 }}>
         <SearchField value={query} onChangeText={setQuery} placeholder="Search name or MTO number" />
         <ChipRow>
