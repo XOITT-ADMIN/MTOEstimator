@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { hasPerm, isOrgAdmin, permsIn, projectIdsOf, requireMember, type Member } from "../lib/access.js";
 import { badRequest, conflict, forbidden, notFound } from "../lib/errors.js";
-import { canPerform, findTransition, isMtoStatus, NOTIFY_ON_REACH, statusesWaitingOnPerms, STATUSES_WAITING_ON_CREATOR } from "../lib/mtoStatus.js";
+import { canPerform, findTransition, isMtoStatus, statusesWaitingOnPerms, STATUSES_WAITING_ON_CREATOR } from "../lib/mtoStatus.js";
 import { toNum } from "../lib/num.js";
 import type { Deps } from "../app.js";
 import type { Prisma } from "../db.js";
@@ -218,7 +218,7 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
     hub.publish(m.companyId, "estimates", { by: m.userId });
     if (body.to === "CANCELLED" || body.to === "CLOSED") hub.publish(m.companyId, "stock", { by: m.userId });
 
-    sendTransitionEmail({ db, mailer, companyId: m.companyId, estimateId: id, toStatus: body.to, actorName: m.name, comment: body.comment, createdById: result.createdById, mtoData: result.nextData }).catch(() => {});
+    sendTransitionEmail({ db, mailer, companyId: m.companyId, estimateId: id, toStatus: body.to, actorName: m.name, comment: body.comment, mtoData: result.nextData }).catch(() => {});
 
     return { item: result.nextData };
   });
@@ -397,7 +397,6 @@ export async function mtoRoutes(app: FastifyInstance, { db, hub, mailer }: Deps)
             action:     "transition",
           },
         });
-        sendTransitionEmail({ db, mailer, companyId: m.companyId, estimateId: dispatch.estimateId, toStatus: "DELIVERED", actorName: m.name, comment: "", createdById: mto.createdById, mtoData: nextData }).catch(() => {});
       }
     }
 
@@ -432,8 +431,9 @@ function viewDispatch(d: { id: string; loadingCheck: boolean; loadingCost: Prism
   };
 }
 
-// Phase 2: resolve who to email and send it. Runs outside the transaction.
-async function sendTransitionEmail({ db, mailer, companyId, estimateId, toStatus, actorName, comment, createdById, mtoData }: {
+// The one workflow email: when an MTO is marked Ready to dispatch, the project's notification
+// email (set on the project) is told. Nobody is emailed individually. Runs outside the transaction.
+async function sendTransitionEmail({ db, mailer, companyId, estimateId, toStatus, actorName, comment, mtoData }: {
   db: Parameters<typeof mtoRoutes>[1]["db"];
   mailer: Parameters<typeof mtoRoutes>[1]["mailer"];
   companyId: string;
@@ -441,57 +441,24 @@ async function sendTransitionEmail({ db, mailer, companyId, estimateId, toStatus
   toStatus: string;
   actorName: string;
   comment: string;
-  createdById: string;
   mtoData: unknown;
 }) {
-  if (!mailer.enabled) return;
-  const notify = NOTIFY_ON_REACH[toStatus as keyof typeof NOTIFY_ON_REACH] ?? [];
+  if (!mailer.enabled || toStatus !== "READY_TO_DISPATCH") return;
+
+  const est = await db.estimate.findUnique({ where: { companyId_id: { companyId, id: estimateId } }, select: { projectId: true } });
+  const project = est ? await db.project.findUnique({ where: { id: est.projectId }, select: { name: true, notificationEmail: true } }) : null;
+  if (!project?.notificationEmail) return;
 
   const data = mtoData as Record<string, unknown>;
-  const number = data.estimateNumber as string || estimateId;
-  const name   = data.name as string || "";
-
-  const est0 = await db.estimate.findUnique({ where: { companyId_id: { companyId, id: estimateId } }, select: { projectId: true } });
-  const projectId = est0?.projectId ?? "";
-  // Owner/admin hold every permission; everyone else gets it through the roles they hold on this
-  // MTO's project, as the company has defined them.
-  const orgMembers = await db.membership.findMany({ where: { companyId }, include: { user: true } });
-  const projectMembers = await db.projectMember.findMany({ where: { companyId, projectId }, include: { user: true } });
-  const roleRows = await db.orgRole.findMany({ where: { companyId }, select: { key: true, permissions: true } });
-  const rolePerms = new Map(roleRows.map((r) => [r.key, r.permissions]));
-  const holds = (keys: string[], perm: string) => keys.some((k) => rolePerms.get(k)?.includes(perm));
-
-  const recipients = new Set<string>();
-  for (const target of notify) {
-    if (target === "creator") {
-      const creator = await db.user.findUnique({ where: { id: createdById }, select: { email: true } });
-      if (creator) recipients.add(creator.email);
-    } else if (target === "everyone") {
-      for (const mem of orgMembers) if (mem.roles.length) recipients.add(mem.user.email);
-      for (const mem of projectMembers) recipients.add(mem.user.email);
-    } else {
-      for (const mem of orgMembers) if (mem.roles.length) recipients.add(mem.user.email);
-      for (const mem of projectMembers) if (holds(mem.roles, target)) recipients.add(mem.user.email);
-    }
-  }
-
-  // "Ready" (cleared for dispatch) also goes to the project's own notification address, if set.
-  if (toStatus === "READY_TO_DISPATCH") {
-    const project = projectId ? await db.project.findUnique({ where: { id: projectId }, select: { notificationEmail: true } }) : null;
-    if (project?.notificationEmail) recipients.add(project.notificationEmail);
-  }
-
-  if (!recipients.size) return;
-
-  const subject = `${number} moved to ${toStatus.replace(/_/g, " ")}`;
+  const number = (data.estimateNumber as string) || estimateId;
+  const name = (data.name as string) || "";
   const body = [
-    `MTO ${number} — ${name}`,
-    `Status: ${toStatus.replace(/_/g, " ")}`,
+    `MTO ${number}${name && name !== number ? ` — ${name}` : ""}`,
+    `Project: ${project.name}`,
+    "Status: Ready to dispatch",
     `By: ${actorName}`,
     comment ? `Comment: ${comment}` : "",
   ].filter(Boolean).join("\n");
 
-  for (const email of recipients) {
-    mailer.send(email, subject, body).catch(() => {});
-  }
+  mailer.send(project.notificationEmail, `${number} is ready to dispatch`, body).catch(() => {});
 }

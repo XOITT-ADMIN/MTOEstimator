@@ -3,7 +3,6 @@ import { View, ScrollView } from "react-native";
 
 import { Sheet, Field, Button, TextButton, Segmented, SearchField, Group, PickRow, ChoiceTile, StepProgress, SuggestChip, HStack, T, RowBetween, colors } from "../../ui";
 import { tradeCatalog, findItem } from "../../data/catalog";
-import { useCatalog } from "../../library/CatalogContext";
 import { specLabel } from "../estimates";
 import { formatINR } from "../../utils/currency";
 
@@ -83,7 +82,6 @@ export function AddLineSheet({ onClose, onSave }) {
   const [stock, setStock] = useState("");
   const [price, setPrice] = useState("");
   const [filter, setFilter] = useState("");
-  useCatalog(); // re-render when the item library changes
   const cat = tradeCatalog(trade);
   const found = item ? findItem(trade, item) : null;
   const isPlumbing = trade === "Plumbing";

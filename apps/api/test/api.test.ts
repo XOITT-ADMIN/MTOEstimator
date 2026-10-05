@@ -164,51 +164,6 @@ describe("library + stock", () => {
     assert.equal(neg.json.results[0].ok, false);
     await call("POST", `/sync/stock?projectId=${wtId}`, owner, { deletes: [key] });
   });
-
-  test("catalog: default is version 0, admins publish new versions", async () => {
-    const v0 = await call("GET", "/library/catalog", eng1);
-    assert.equal(v0.json.version, 0);
-    assert.ok(v0.json.data.plumbing.families.length > 0);
-    assert.equal((await call("POST", "/library/catalog", eng1, { data: v0.json.data })).status, 403);
-    const pub = await call("POST", "/library/catalog", owner, { data: v0.json.data, note: "first" });
-    assert.equal(pub.json.version, 1);
-    assert.equal((await call("GET", "/library/catalog", eng2)).json.version, 1);
-  });
-
-  test("catalog edits: checked, no lost updates, can't remove what stock uses", async () => {
-    const cur = (await call("GET", "/library/catalog", owner)).json;
-    const data = structuredClone(cur.data);
-    data.plumbing.families.push("Pump");
-    data.plumbing.items.Pump = [{ name: "Booster Pump", unit: "Nos", needsSecondarySize: false }];
-
-    const ok = await call("POST", "/library/catalog", owner, { data, baseVersion: cur.version, note: "add pump" });
-    assert.equal(ok.status, 200, JSON.stringify(ok.json));
-    const saved = (await call("GET", "/library/catalog", eng1)).json;
-    assert.equal(saved.version, cur.version + 1);
-    assert.equal(saved.data.plumbing.items.Pump[0].name, "Booster Pump");
-
-    // someone saving from the old version is stopped, not silently overwritten
-    const stale = await call("POST", "/library/catalog", owner, { data, baseVersion: cur.version });
-    assert.equal(stale.status, 409);
-    assert.equal(stale.json.code, "catalog_changed");
-
-    // duplicate item name within a trade
-    const dup = structuredClone(saved.data);
-    dup.plumbing.items.Pump.push({ name: "Pipe", unit: "m" });
-    const bad = await call("POST", "/library/catalog", owner, { data: dup, baseVersion: saved.version });
-    assert.equal(bad.status, 400);
-    assert.match(bad.json.error, /unique/);
-
-    // PVC is used by a stock line → can't be removed
-    const noPvc = structuredClone(saved.data);
-    noPvc.plumbing.materials = noPvc.plumbing.materials.filter((m: string) => m !== "PVC");
-    const inUse = await call("POST", "/library/catalog", owner, { data: noPvc, baseVersion: saved.version });
-    assert.equal(inUse.status, 409);
-    assert.equal(inUse.json.code, "catalog_in_use");
-    assert.match(inUse.json.error, /PVC/);
-
-    assert.equal((await call("POST", "/library/catalog", eng1, { data: saved.data, baseVersion: saved.version })).status, 403);
-  });
 });
 
 describe("projects", () => {

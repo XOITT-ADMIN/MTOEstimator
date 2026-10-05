@@ -4,7 +4,7 @@ import { View } from "react-native";
 import { Screen, Section, Group, Row, Card, Avatar, InitialsTile, RolePill, IconTile, Button, Logo, MadeByXoitt, T, Icon, colors } from "../ui";
 import { ProfileField } from "../features/settings/ProfileField";
 import { SecuritySection } from "../features/settings/SecuritySection";
-import { plural, shortDate } from "../features/estimates";
+import { plural } from "../features/estimates";
 import { useAuth } from "../context/AuthContext";
 import { useCompany, rolesLabel } from "../context/CompanyContext";
 import { useEstimates } from "../context/EstimatesContext";
@@ -125,14 +125,6 @@ export default function SettingsScreen({ navigation }) {
             </T>
             <T variant="label" weight={400}>
               {sync.text}
-            </T>
-          </Row>
-          <Row left={<Icon name="layers" size={20} color="blue700" />} onPress={() => navigation.navigate("Library")}>
-            <T variant="body" weight={500}>
-              Library source
-            </T>
-            <T variant="label" weight={400}>
-              {connected ? `Company library${company?.updatedAt ? ` · updated ${shortDate(company.updatedAt)}` : ""}` : "Built-in (MTO_Template.xlsx)"}
             </T>
           </Row>
         </Group>

@@ -86,16 +86,3 @@ export function statusesWaitingOnPerms(perms: ReadonlySet<string>): MtoStatus[] 
 }
 
 export const STATUSES_WAITING_ON_CREATOR: MtoStatus[] = ["REJECTED"];
-
-// Who to email when an MTO reaches each status: whoever holds the permission on that MTO's
-// project (plus owner/admin), the MTO's creator, or everyone on the project.
-export const NOTIFY_ON_REACH: Partial<Record<MtoStatus, Array<Permission | "creator" | "everyone">>> = {
-  SUBMITTED:         ["mto.approve"],
-  REJECTED:          ["creator"],
-  APPROVED:          ["mto.budget"],
-  SENT_BACK:         ["mto.approve"],
-  BUDGET_OK:         ["mto.procure"],
-  READY_TO_DISPATCH: ["mto.dispatch"],
-  DELIVERED:         ["creator", "mto.approve"],
-  CANCELLED:         ["everyone"],
-};

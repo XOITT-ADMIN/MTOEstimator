@@ -1,6 +1,6 @@
 import type { WebSocket } from "ws";
 
-export type Resource = "estimates" | "stock" | "rates" | "company" | "members" | "catalog" | "projects";
+export type Resource = "estimates" | "stock" | "rates" | "company" | "members" | "projects";
 
 // In-process fan-out of "something changed" events, per company. The app refetches the resource
 // when it hears about it. For more than one API instance, swap this for Redis pub/sub.

@@ -15,7 +15,6 @@ import { EstimatesProvider } from "./src/context/EstimatesContext";
 import { CompanyProvider } from "./src/context/CompanyContext";
 import { ProjectsProvider } from "./src/context/ProjectsContext";
 import { RatesProvider } from "./src/pricing/RatesContext";
-import { CatalogProvider } from "./src/library/CatalogContext";
 import { InventoryProvider } from "./src/inventory/InventoryContext";
 import RootNavigator from "./src/navigation/RootNavigator";
 import SyncBanner from "./src/components/SyncBanner";
@@ -38,7 +37,6 @@ export default function App() {
         <AppLockProvider>
           <CompanyProvider>
             <ProjectsProvider>
-              <CatalogProvider>
                 <RatesProvider>
                   <EstimatesProvider>
                     <InventoryProvider>
@@ -51,7 +49,6 @@ export default function App() {
                     </InventoryProvider>
                   </EstimatesProvider>
                 </RatesProvider>
-              </CatalogProvider>
             </ProjectsProvider>
           </CompanyProvider>
         </AppLockProvider>

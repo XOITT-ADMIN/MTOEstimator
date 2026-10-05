@@ -26,10 +26,6 @@
     "./keys": {
       "types": "./src/index.d.ts",
       "default": "./src/keys.js"
-    },
-    "./catalogTools": {
-      "types": "./src/index.d.ts",
-      "default": "./src/catalogTools.js"
     }
   }
 }

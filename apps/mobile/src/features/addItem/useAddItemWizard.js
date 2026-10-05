@@ -1,7 +1,6 @@
 import { useMemo, useState, useEffect, useCallback } from "react";
 
 import { tradeCatalog, tradeItems, findItem, unitFor } from "../../data/catalog";
-import { useCatalog } from "../../library/CatalogContext";
 import { useEstimates } from "../../context/EstimatesContext";
 import { useRates } from "../../pricing/RatesContext";
 import { useProjectScope } from "../../context/ProjectsContext";
@@ -83,7 +82,6 @@ export function useAddItemWizard({ estimateId, editItemId, onDone }) {
   // When a pick is changed from the review step, come straight back to it afterwards.
   const [returnTo, setReturnTo] = useState(null);
 
-  useCatalog(); // re-render when an admin changes the item library
   const catalog = tradeCatalog(trade);
   const isPlumbing = trade === "Plumbing";
   const selectedItem = useMemo(() => (itemName ? findItem(trade, itemName) : null), [trade, itemName, catalog]); // eslint-disable-line react-hooks/exhaustive-deps

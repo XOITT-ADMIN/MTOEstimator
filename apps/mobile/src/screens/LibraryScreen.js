@@ -5,16 +5,15 @@ import { Screen, Tabs, Notice, SearchField, EmptyState, Chip, ChipRow, colors } 
 import { StockTab } from "../features/library/StockTab";
 import { RatesTab } from "../features/library/RatesTab";
 import { ReturnsTab } from "../features/library/ReturnsTab";
-import { CatalogTab } from "../features/library/CatalogTab";
 import { useCompany } from "../context/CompanyContext";
 import { useProjects, useProjectScope } from "../context/ProjectsContext";
 import { useRates } from "../pricing/RatesContext";
 import { useInventory } from "../inventory/InventoryContext";
 
-const SECTIONS = ["Stock", "Returns", "Plumbing", "Electrical", "Materials", "Sizes", "Budget rates"];
+const SECTIONS = ["Stock", "Returns", "Budget rates"];
 
-// Library: stock and rates (kept per project — pick which one at the top) and the company's master
-// catalog (shared by every project). Each tab is in features/library/.
+// Library: stock, returns and budget rates — kept per project, so pick which one at the top.
+// Each tab is in features/library/.
 export default function LibraryScreen() {
   const [section, setSection] = useState("Stock");
   const [query, setQuery] = useState("");
@@ -27,7 +26,7 @@ export default function LibraryScreen() {
   const { canEdit: canEditRates, loaded: ratesLoaded } = useRates();
   const { canEdit: canEditStock = true, loaded: stockLoaded } = useInventory();
   const readOnly = !canEditRates && !canEditStock;
-  const searchable = section !== "Stock" && section !== "Sizes" && section !== "Returns";
+  const searchable = section === "Budget rates";
 
   return (
     <Screen tabBar title="Library" subtitle={serverMode && project ? `Stock and budget rates for ${project.name}` : `Budget rates and stock for ${profile?.name || "your company"}`} loading={!ratesLoaded && !stockLoaded}>
@@ -50,7 +49,7 @@ export default function LibraryScreen() {
       {needsProject ? (
         <EmptyState icon="building" title="No project yet" body="Stock and budget rates live inside a project. Create a project first, then set its stock and budget rates here." />
       ) : section === "Returns" ? <ReturnsTab />
-      : section === "Stock" ? <StockTab /> : section === "Budget rates" ? <RatesTab query={query} /> : <CatalogTab section={section} query={query} />}
+      : section === "Stock" ? <StockTab /> : <RatesTab query={query} />}
     </Screen>
   );
 }

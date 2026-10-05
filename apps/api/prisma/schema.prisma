@@ -84,7 +84,6 @@ model Company {
   estimates      Estimate[]
   stock          StockLine[]
   rates          RateOverride[]
-  catalogs       CatalogVersion[]
   projects       Project[]
   orgRoles       OrgRole[]
   stockMovements StockMovement[]
@@ -343,18 +342,4 @@ model RateOverride {
   company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@id([companyId, projectId, key])
-}
-
-// Published versions of the item catalog (families, items, materials, sizes, cores).
-// No row = the company uses the catalog bundled in packages/shared.
-model CatalogVersion {
-  companyId     String
-  version       Int
-  data          Json
-  note          String   @default("")
-  publishedById String
-  publishedAt   DateTime @default(now())
-  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-
-  @@id([companyId, version])
 }
